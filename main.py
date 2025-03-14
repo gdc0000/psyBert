@@ -225,16 +225,26 @@ if st.button("Step 7: Run Exploratory Factor Analysis (EFA)"):
     if st.session_state.similarity_results is None:
         st.error("Please compute similarity scores first.")
     else:
+        # Monkey patch for compatibility: make scipy.sum point to numpy.sum
+        import scipy
+        import numpy as np
+        scipy.sum = np.sum
+
         df = st.session_state.similarity_results.copy()
         score_cols = [col for col in df.columns if col.endswith("_score")]
         data_for_efa = df[score_cols]
-        fa = FactorAnalyzer(n_factors=2, rotation="varimax")
-        fa.fit(data_for_efa)
-        eigenvalues, _ = fa.get_eigenvalues()
-        loadings = pd.DataFrame(fa.loadings_, index=score_cols)
-        st.subheader("Eigenvalues")
-        st.write(eigenvalues)
-        st.subheader("Factor Loadings")
-        st.write(loadings)
+
+        try:
+            fa = FactorAnalyzer(n_factors=2, rotation="varimax")
+            fa.fit(data_for_efa)
+            eigenvalues, _ = fa.get_eigenvalues()
+            loadings = pd.DataFrame(fa.loadings_, index=score_cols)
+            
+            st.subheader("Eigenvalues")
+            st.write(eigenvalues)
+            st.subheader("Factor Loadings")
+            st.write(loadings)
+        except Exception as e:
+            st.error(f"Error during factor analysis: {e}")
 
 st.write("Session State Keys:", list(st.session_state.keys()))
