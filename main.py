@@ -122,12 +122,15 @@ if st.button("Step 1: Generate Text Embeddings"):
 
 # Step 2: Embed scales and compute similarity scores
 if st.button("Step 2: Compute Similarity Scores for Scales"):
+    # Use the same filtered texts used for embeddings
+    texts = st.session_state.text_data[st.session_state.text_column].dropna().tolist()
+    
     if st.session_state.scales_data == {}:
         st.error("Please upload the validated scales file first.")
     elif st.session_state.text_embeddings is None:
         st.error("Please generate text embeddings first.")
     else:
-        results = {"Text": st.session_state.text_data[st.session_state.text_column].tolist()}
+        results = {"Text": texts}
         for scale, items in st.session_state.scales_data.items():
             st.write(f"Processing scale: {scale}")
             # Compute embeddings for each scale item
@@ -140,9 +143,17 @@ if st.button("Step 2: Compute Similarity Scores for Scales"):
             # Aggregate by averaging across the items
             agg_scores = sims.cpu().numpy().mean(axis=1)
             results[f"{scale}_score"] = agg_scores
-        st.session_state.similarity_results = pd.DataFrame(results)
-        st.success("Similarity scores computed and compiled.")
-        st.write(st.session_state.similarity_results.head())
+        
+        # Debug: Print lengths of arrays to ensure consistency
+        lengths = {key: len(val) for key, val in results.items()}
+        st.write("Array lengths in results:", lengths)
+        if len(set(lengths.values())) > 1:
+            st.error("Mismatch in data lengths. Please ensure that your text column has no missing values.")
+        else:
+            st.session_state.similarity_results = pd.DataFrame(results)
+            st.success("Similarity scores computed and compiled.")
+            st.write(st.session_state.similarity_results.head())
+
 
 # Step 3: Exclude outliers based on Z-scores
 if st.button("Step 3: Exclude Outliers (Z-score > 3)"):
