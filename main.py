@@ -3,16 +3,16 @@ import pandas as pd
 import numpy as np
 import torch
 from sentence_transformers import SentenceTransformer, util
-from scipy.stats import zscore
 import matplotlib.pyplot as plt
 import seaborn as sns
+from scipy.stats import zscore
 from factor_analyzer import FactorAnalyzer
 import time
 
 # Set page configuration
-st.set_page_config(page_title="BERT-based Text Analysis", layout="wide")
+st.set_page_config(page_title="BERT-based Text Analysis Application", layout="wide")
 
-# Initialize session state variables
+# Initialize session state variables if not set already
 if "text_data" not in st.session_state:
     st.session_state.text_data = None
 if "text_column" not in st.session_state:
@@ -32,11 +32,13 @@ if "similarity_results" not in st.session_state:
 if "normalized_df" not in st.session_state:
     st.session_state.normalized_df = None
 
-# Sidebar: Upload files and select model
-st.sidebar.header("Input Files and Model Selection")
+st.title("BERT-based Text Analysis Application")
 
-# Upload textual data file (CSV or Excel)
-text_file = st.sidebar.file_uploader("Upload Text Data (CSV or Excel)", type=["csv", "xlsx"])
+st.header("Step 0: Upload Files and Configure Options")
+
+# --- Upload Text Data ---
+st.subheader("Upload Text Data")
+text_file = st.file_uploader("Upload Text Data (CSV or Excel)", type=["csv", "xlsx"], key="text_file")
 if text_file:
     try:
         if text_file.name.endswith("csv"):
@@ -44,17 +46,18 @@ if text_file:
         else:
             df_text = pd.read_excel(text_file)
         st.session_state.text_data = df_text
-        st.sidebar.write("Preview of Text Data:")
-        st.sidebar.dataframe(df_text.head())
+        st.write("### Preview of Text Data")
+        st.dataframe(df_text.head())
         # Allow user to choose which column to analyze
         cols = df_text.columns.tolist()
-        selected_column = st.sidebar.selectbox("Select the textual column", cols)
+        selected_column = st.selectbox("Select the textual column", cols)
         st.session_state.text_column = selected_column
     except Exception as e:
-        st.sidebar.error(f"Error reading text file: {e}")
+        st.error(f"Error reading text file: {e}")
 
-# Upload validated scales file (Excel with multiple sheets)
-scales_file = st.sidebar.file_uploader("Upload Validated Scales (Excel with sheets named after constructs)", type=["xlsx"])
+# --- Upload Validated Scales File ---
+st.subheader("Upload Validated Scales")
+scales_file = st.file_uploader("Upload Validated Scales (Excel with sheets named after constructs)", type=["xlsx"], key="scales_file")
 if scales_file:
     try:
         xls = pd.ExcelFile(scales_file)
@@ -62,35 +65,35 @@ if scales_file:
         reverse_items_dict = {}
         for sheet_name in xls.sheet_names:
             df_sheet = pd.read_excel(xls, sheet_name=sheet_name)
-            # Ensure the sheet contains both "Item" and "Rev" columns
+            # Check for required columns "Item" and "Rev"
             if "Item" in df_sheet.columns and "Rev" in df_sheet.columns:
-                # Drop rows where "Item" is missing
+                # Drop rows with missing items
                 df_sheet = df_sheet.dropna(subset=["Item"])
                 items = df_sheet["Item"].tolist()
-                # Compute reverse indices: reverse items are those with Rev == 1
+                # Identify reverse scored items: those rows with Rev == 1
                 reverse_indices = [i for i, val in enumerate(df_sheet["Rev"].tolist()) if int(val) == 1]
                 scales_data[sheet_name] = items
                 reverse_items_dict[sheet_name] = reverse_indices
             else:
-                st.sidebar.error(f"Sheet '{sheet_name}' must have both 'Item' and 'Rev' columns.")
+                st.error(f"Sheet '{sheet_name}' must have both 'Item' and 'Rev' columns.")
         st.session_state.scales_data = scales_data
         st.session_state.reverse_items = reverse_items_dict
-        st.sidebar.write("Uploaded Scales:")
-        st.sidebar.write(scales_data)
-        st.sidebar.write("Reverse Scored Items:")
-        st.sidebar.write(reverse_items_dict)
+        st.write("### Uploaded Scales:")
+        st.write(scales_data)
+        st.write("### Reverse Scored Items:")
+        st.write(reverse_items_dict)
     except Exception as e:
-        st.sidebar.error(f"Error reading scales file: {e}")
+        st.error(f"Error reading scales file: {e}")
 
-# Model selection: Provide a dropdown with descriptions
-st.sidebar.subheader("Select Embedding Model")
+# --- Model Selection ---
+st.subheader("Select Embedding Model")
 model_options = {
     "all-MiniLM-L6-v2": "Lightweight and efficient model for sentence embeddings.",
     "paraphrase-MiniLM-L3-v2": "Faster model with lower dimensionality, ideal for paraphrase tasks.",
     "all-distilroberta-v1": "Robust model based on DistilRoBERTa for diverse tasks."
 }
-selected_model = st.sidebar.selectbox("Choose model", list(model_options.keys()), index=0)
-st.sidebar.write(model_options[selected_model])
+selected_model = st.selectbox("Choose model", list(model_options.keys()), index=0)
+st.write(model_options[selected_model])
 st.session_state.selected_model = selected_model
 
 # Load the selected model if not already loaded
@@ -99,14 +102,15 @@ if st.session_state.model_instance is None:
         st.session_state.model_instance = SentenceTransformer(st.session_state.selected_model)
     st.success("Model loaded.")
 
-# Main app title
-st.title("BERT-based Text Analysis Application")
+st.write("Files and options configured. Proceed with analysis steps below.")
 
-# Step 1: Embed textual data
-if st.button("Step 1: Generate Text Embeddings"):
+st.markdown("---")
+st.header("Step 1: Generate Text Embeddings")
+if st.button("Generate Text Embeddings"):
     if st.session_state.text_data is None or st.session_state.text_column is None:
         st.error("Please upload your text data and select the textual column.")
     else:
+        # Filter out null values
         texts = st.session_state.text_data[st.session_state.text_column].dropna().tolist()
         embeddings = []
         progress_bar = st.progress(0)
@@ -119,16 +123,16 @@ if st.button("Step 1: Generate Text Embeddings"):
         st.session_state.text_embeddings = torch.stack(embeddings)
         st.success("Text embeddings generated successfully.")
 
-# Step 2: Embed scales and compute similarity scores
-if st.button("Step 2: Compute Similarity Scores for Scales"):
-    # Use the same filtered texts used for embeddings
-    texts = st.session_state.text_data[st.session_state.text_column].dropna().tolist()
-    
-    if st.session_state.scales_data == {}:
+st.markdown("---")
+st.header("Step 2: Compute Similarity Scores for Scales")
+if st.button("Compute Similarity Scores"):
+    if not st.session_state.scales_data:
         st.error("Please upload the validated scales file first.")
     elif st.session_state.text_embeddings is None:
         st.error("Please generate text embeddings first.")
     else:
+        # Use the same filtered texts used for embeddings
+        texts = st.session_state.text_data[st.session_state.text_column].dropna().tolist()
         results = {"Text": texts}
         for scale, items in st.session_state.scales_data.items():
             st.write(f"Processing scale: {scale}")
@@ -142,7 +146,7 @@ if st.button("Step 2: Compute Similarity Scores for Scales"):
             # Aggregate by averaging across the items
             agg_scores = sims.cpu().numpy().mean(axis=1)
             results[f"{scale}_score"] = agg_scores
-        
+
         # Debug: Print lengths of arrays to ensure consistency
         lengths = {key: len(val) for key, val in results.items()}
         st.write("Array lengths in results:", lengths)
@@ -153,9 +157,9 @@ if st.button("Step 2: Compute Similarity Scores for Scales"):
             st.success("Similarity scores computed and compiled.")
             st.write(st.session_state.similarity_results.head())
 
-
-# Step 3: Exclude outliers based on Z-scores
-if st.button("Step 3: Exclude Outliers (Z-score > 3)"):
+st.markdown("---")
+st.header("Step 3: Exclude Outliers (Z-score > 3)")
+if st.button("Exclude Outliers"):
     if st.session_state.similarity_results is None:
         st.error("Please compute similarity scores first.")
     else:
@@ -167,9 +171,11 @@ if st.button("Step 3: Exclude Outliers (Z-score > 3)"):
         st.session_state.similarity_results = df_no_outliers
         st.success("Outliers excluded.")
         st.write(f"Data shape after outlier removal: {df_no_outliers.shape}")
+        st.write(st.session_state.similarity_results.head())
 
-# Step 4: Normalize the data (Min-Max Normalization)
-if st.button("Step 4: Normalize Data"):
+st.markdown("---")
+st.header("Step 4: Normalize Data (Min-Max Normalization)")
+if st.button("Normalize Data"):
     if st.session_state.similarity_results is None:
         st.error("Please compute similarity scores first.")
     else:
@@ -182,8 +188,9 @@ if st.button("Step 4: Normalize Data"):
         st.success("Data normalized successfully.")
         st.write(st.session_state.normalized_df.head())
 
-# Step 5: Descriptive statistics and visualization
-if st.button("Step 5: Show Descriptive Statistics & Visualizations"):
+st.markdown("---")
+st.header("Step 5: Descriptive Statistics & Visualizations")
+if st.button("Show Descriptive Statistics & Visualizations"):
     if st.session_state.similarity_results is None:
         st.error("Please compute similarity scores first.")
     else:
@@ -205,8 +212,9 @@ if st.button("Step 5: Show Descriptive Statistics & Visualizations"):
         sns.heatmap(corr, annot=True, cmap="coolwarm", fmt=".2f", ax=ax)
         st.pyplot(fig)
 
-# Step 6: Correlation Analysis
-if st.button("Step 6: Run Correlation Analysis"):
+st.markdown("---")
+st.header("Step 6: Correlation Analysis")
+if st.button("Run Correlation Analysis"):
     if st.session_state.similarity_results is None:
         st.error("Please compute similarity scores first.")
     else:
@@ -219,14 +227,14 @@ if st.button("Step 6: Run Correlation Analysis"):
         sns.heatmap(corr_matrix, annot=True, cmap="coolwarm", fmt=".2f", ax=ax)
         st.pyplot(fig)
 
-# Step 7: Exploratory Factor Analysis (EFA)
-if st.button("Step 7: Run Exploratory Factor Analysis (EFA)"):
+st.markdown("---")
+st.header("Step 7: Exploratory Factor Analysis (EFA)")
+if st.button("Run Exploratory Factor Analysis (EFA)"):
     if st.session_state.similarity_results is None:
         st.error("Please compute similarity scores first.")
     else:
         # Monkey patch for compatibility: make scipy.sum point to numpy.sum
         import scipy
-        import numpy as np
         scipy.sum = np.sum
 
         df = st.session_state.similarity_results.copy()
@@ -246,4 +254,5 @@ if st.button("Step 7: Run Exploratory Factor Analysis (EFA)"):
         except Exception as e:
             st.error(f"Error during factor analysis: {e}")
 
+st.markdown("---")
 st.write("Session State Keys:", list(st.session_state.keys()))
