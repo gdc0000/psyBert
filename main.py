@@ -58,28 +58,27 @@ scales_file = st.sidebar.file_uploader("Upload Validated Scales (Excel with shee
 if scales_file:
     try:
         xls = pd.ExcelFile(scales_file)
-        scales_dict = {}
+        scales_data = {}
+        reverse_items_dict = {}
         for sheet_name in xls.sheet_names:
             df_sheet = pd.read_excel(xls, sheet_name=sheet_name)
-            # Expecting a column named "Item" with the scale items
-            if "Item" in df_sheet.columns:
-                items = df_sheet["Item"].dropna().tolist()
-                scales_dict[sheet_name] = items
-        st.session_state.scales_data = scales_dict
+            # Ensure the sheet contains both "Item" and "Rev" columns
+            if "Item" in df_sheet.columns and "Rev" in df_sheet.columns:
+                # Drop rows where "Item" is missing
+                df_sheet = df_sheet.dropna(subset=["Item"])
+                items = df_sheet["Item"].tolist()
+                # Compute reverse indices: reverse items are those with Rev == 1
+                reverse_indices = [i for i, val in enumerate(df_sheet["Rev"].tolist()) if int(val) == 1]
+                scales_data[sheet_name] = items
+                reverse_items_dict[sheet_name] = reverse_indices
+            else:
+                st.sidebar.error(f"Sheet '{sheet_name}' must have both 'Item' and 'Rev' columns.")
+        st.session_state.scales_data = scales_data
+        st.session_state.reverse_items = reverse_items_dict
         st.sidebar.write("Uploaded Scales:")
-        st.sidebar.write(scales_dict)
-        # For each scale, ask for reverse-scored item indices (0-indexed, comma separated)
-        st.sidebar.subheader("Reverse Scored Items")
-        reverse_dict = {}
-        for scale in scales_dict.keys():
-            rev = st.sidebar.text_input(f"Reverse items for {scale} (e.g., 1,3)", key=scale)
-            if rev:
-                try:
-                    indices = [int(x.strip()) for x in rev.split(",") if x.strip().isdigit()]
-                    reverse_dict[scale] = indices
-                except Exception as e:
-                    st.sidebar.error(f"Error for {scale}: {e}")
-        st.session_state.reverse_items = reverse_dict
+        st.sidebar.write(scales_data)
+        st.sidebar.write("Reverse Scored Items:")
+        st.sidebar.write(reverse_items_dict)
     except Exception as e:
         st.sidebar.error(f"Error reading scales file: {e}")
 
