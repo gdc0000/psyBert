@@ -71,13 +71,13 @@ if scales_file:
                 # Drop rows with missing items
                 df_sheet = df_sheet.dropna(subset=["Item"])
                 items = df_sheet["Item"].tolist()
-                # Try to compute reverse indices by converting the Rev value to float
+                # Compute reverse indices: rows with Rev == 1 (as float)
                 try:
                     computed_rev = [i for i, val in enumerate(df_sheet["Rev"].tolist()) if float(val) == 1.0]
                 except Exception as e:
                     computed_rev = []
                     st.sidebar.error(f"Error processing reverse items in sheet '{sheet_name}': {e}")
-                # Show a preview table of items with indices so the user can verify
+                # Show a preview table of items with indices for user verification
                 st.sidebar.write(f"Review reverse items for scale: {sheet_name}")
                 df_preview = pd.DataFrame({
                     "Index": list(range(len(items))),
@@ -98,10 +98,6 @@ if scales_file:
                 st.sidebar.error(f"Sheet '{sheet_name}' must have both 'Item' and 'Rev' columns.")
         st.session_state.scales_data = scales_data
         st.session_state.reverse_items = reverse_items_dict
-        st.sidebar.write("Uploaded Scales:")
-        st.sidebar.write(scales_data)
-        st.sidebar.write("Final Reverse Scored Items:")
-        st.sidebar.write(reverse_items_dict)
     except Exception as e:
         st.sidebar.error(f"Error reading scales file: {e}")
 
@@ -164,7 +160,7 @@ if st.button("Compute Similarity Scores", key="btn_compute_sim"):
             # Compute embeddings for each scale item
             item_embeds = st.session_state.model_instance.encode(items, convert_to_tensor=True)
             sims = util.cos_sim(st.session_state.text_embeddings, item_embeds)
-            # Apply reverse scoring automatically using the (possibly adjusted) reverse indices
+            # Apply reverse scoring using the (possibly adjusted) reverse indices
             if scale in st.session_state.reverse_items:
                 rev_idx = st.session_state.reverse_items[scale]
                 sims[:, rev_idx] = 1 - sims[:, rev_idx]
