@@ -32,7 +32,9 @@ if "similarity_results" not in st.session_state:
 if "normalized_df" not in st.session_state:
     st.session_state.normalized_df = None
 
-# Sidebar: File uploads and configurations
+# =============================================================================
+# Sidebar: File Uploads and Configuration
+# =============================================================================
 st.sidebar.header("File Uploads and Configuration")
 
 # --- Upload Text Data ---
@@ -66,19 +68,39 @@ if scales_file:
             df_sheet = pd.read_excel(xls, sheet_name=sheet_name)
             # Check for required columns "Item" and "Rev"
             if "Item" in df_sheet.columns and "Rev" in df_sheet.columns:
+                # Drop rows with missing items
                 df_sheet = df_sheet.dropna(subset=["Item"])
                 items = df_sheet["Item"].tolist()
-                # Reverse scored items: rows with Rev == 1
-                reverse_indices = [i for i, val in enumerate(df_sheet["Rev"].tolist()) if int(val) == 1]
+                # Try to compute reverse indices by converting the Rev value to float
+                try:
+                    computed_rev = [i for i, val in enumerate(df_sheet["Rev"].tolist()) if float(val) == 1.0]
+                except Exception as e:
+                    computed_rev = []
+                    st.sidebar.error(f"Error processing reverse items in sheet '{sheet_name}': {e}")
+                # Show a preview table of items with indices so the user can verify
+                st.sidebar.write(f"Review reverse items for scale: {sheet_name}")
+                df_preview = pd.DataFrame({
+                    "Index": list(range(len(items))),
+                    "Item": items,
+                    "Rev": df_sheet["Rev"].tolist()
+                })
+                st.sidebar.dataframe(df_preview)
+                # Let the user adjust the reverse indices using multiselect (default = computed_rev)
+                user_rev = st.sidebar.multiselect(
+                    f"Select reverse item indices for {sheet_name}",
+                    options=list(range(len(items))),
+                    default=computed_rev,
+                    key=f"rev_{sheet_name}"
+                )
                 scales_data[sheet_name] = items
-                reverse_items_dict[sheet_name] = reverse_indices
+                reverse_items_dict[sheet_name] = user_rev
             else:
                 st.sidebar.error(f"Sheet '{sheet_name}' must have both 'Item' and 'Rev' columns.")
         st.session_state.scales_data = scales_data
         st.session_state.reverse_items = reverse_items_dict
         st.sidebar.write("Uploaded Scales:")
         st.sidebar.write(scales_data)
-        st.sidebar.write("Reverse Scored Items:")
+        st.sidebar.write("Final Reverse Scored Items:")
         st.sidebar.write(reverse_items_dict)
     except Exception as e:
         st.sidebar.error(f"Error reading scales file: {e}")
@@ -100,7 +122,9 @@ if st.session_state.model_instance is None:
         st.session_state.model_instance = SentenceTransformer(st.session_state.selected_model)
     st.sidebar.success("Model loaded.")
 
-# Main window: Display analysis steps and outputs
+# =============================================================================
+# Main Window: Analysis Steps and Outputs
+# =============================================================================
 st.title("BERT-based Text Analysis Application")
 st.markdown("### Analysis Steps")
 st.write("Configure file uploads and options in the sidebar. Then, proceed with the analysis below.")
@@ -111,7 +135,7 @@ if st.button("Generate Text Embeddings", key="btn_gen_text_embed"):
     if st.session_state.text_data is None or st.session_state.text_column is None:
         st.error("Please upload your text data and select the textual column in the sidebar.")
     else:
-        # Use only non-null values
+        # Use only non-null values for consistency
         texts = st.session_state.text_data[st.session_state.text_column].dropna().tolist()
         embeddings = []
         progress_bar = st.progress(0)
@@ -137,14 +161,14 @@ if st.button("Compute Similarity Scores", key="btn_compute_sim"):
         results = {"Text": texts}
         for scale, items in st.session_state.scales_data.items():
             st.write(f"Processing scale: {scale}")
-            # Compute embeddings for scale items
+            # Compute embeddings for each scale item
             item_embeds = st.session_state.model_instance.encode(items, convert_to_tensor=True)
             sims = util.cos_sim(st.session_state.text_embeddings, item_embeds)
-            # Automatically reverse indicated items
+            # Apply reverse scoring automatically using the (possibly adjusted) reverse indices
             if scale in st.session_state.reverse_items:
                 rev_idx = st.session_state.reverse_items[scale]
                 sims[:, rev_idx] = 1 - sims[:, rev_idx]
-            # Average similarity scores for each comment
+            # Aggregate by averaging across the items
             agg_scores = sims.cpu().numpy().mean(axis=1)
             results[f"{scale}_score"] = agg_scores
 
