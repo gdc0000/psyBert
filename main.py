@@ -10,15 +10,16 @@ from factor_analyzer import FactorAnalyzer
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from sklearn.decomposition import PCA  # For PCA analysis
 
-# Configure logging for debugging purposes
+# Configure logging
 logging.basicConfig(level=logging.INFO)
 
 # Set page configuration
 st.set_page_config(page_title="BERT-based Text Analysis Application", layout="wide")
 
 # =============================================================================
-# Helper Functions (with caching)
+# Helper Functions
 # =============================================================================
 
 @st.cache_data(show_spinner=False)
@@ -28,6 +29,34 @@ def load_text_data(file, file_type: str) -> pd.DataFrame:
         return pd.read_csv(file)
     else:
         return pd.read_excel(file)
+
+@st.cache_data(show_spinner=False)
+def load_scales(file) -> (dict, dict):
+    """
+    Load validated scales from an Excel file.
+    Each sheet should contain columns "Item" and "Rev".
+    Returns:
+        scales_data: dict mapping construct names to a list of items.
+        reverse_items_dict: dict mapping construct names to a list of computed reverse indices.
+    """
+    xls = pd.ExcelFile(file)
+    scales_data = {}
+    reverse_items_dict = {}
+    for sheet_name in xls.sheet_names:
+        df_sheet = pd.read_excel(xls, sheet_name=sheet_name)
+        if "Item" in df_sheet.columns and "Rev" in df_sheet.columns:
+            df_sheet = df_sheet.dropna(subset=["Item"])
+            items = df_sheet["Item"].tolist()
+            try:
+                computed_rev = [i for i, val in enumerate(df_sheet["Rev"].tolist()) if float(val) == 1.0]
+            except Exception as e:
+                st.sidebar.error(f"Error processing reverse items in sheet '{sheet_name}': {e}")
+                computed_rev = []
+            scales_data[sheet_name] = items
+            reverse_items_dict[sheet_name] = computed_rev
+        else:
+            st.sidebar.error(f"Sheet '{sheet_name}' must have both 'Item' and 'Rev' columns.")
+    return scales_data, reverse_items_dict
 
 @st.cache_resource(show_spinner=False)
 def get_model(model_name: str) -> SentenceTransformer:
@@ -41,7 +70,7 @@ def generate_text_embeddings(model: SentenceTransformer, texts: list) -> torch.T
     for i, text in enumerate(texts):
         embeddings.append(model.encode(text, convert_to_tensor=True))
         progress_bar.progress((i + 1) / len(texts))
-        time.sleep(0.01)  # Simulate delay for UX
+        time.sleep(0.01)
     return torch.stack(embeddings)
 
 def compute_similarity_scores_aggregated(model: SentenceTransformer, text_embeddings: torch.Tensor,
@@ -73,7 +102,7 @@ def compute_similarity_scores_item_by_item(model: SentenceTransformer, text_embe
                                              scales_data: dict, reverse_items: dict) -> pd.DataFrame:
     """
     Method 2: For each construct (Excel sheet), embed each item separately,
-    apply reverse scoring if needed, and output a separate similarity score column for each item.
+    apply reverse scoring if needed, and output a separate similarity score for each item.
     """
     results = {"Text": st.session_state.text_data[st.session_state.text_column].dropna().tolist()}
     for scale, items in scales_data.items():
@@ -111,7 +140,7 @@ def compute_similarity_scores_single(model: SentenceTransformer, text_embeddings
     return pd.DataFrame(results)
 
 def exclude_outliers(df: pd.DataFrame) -> pd.DataFrame:
-    """Exclude rows with z-scores greater than 3."""
+    """Exclude rows with z-scores greater than 3 in any similarity score column."""
     score_cols = [col for col in df.columns if col != "Text"]
     z_scores = df[score_cols].apply(zscore)
     mask = (np.abs(z_scores) <= 3).all(axis=1)
@@ -124,6 +153,56 @@ def normalize_data(df: pd.DataFrame) -> pd.DataFrame:
     for col in score_cols:
         df_norm[col] = (df_norm[col] - df_norm[col].min()) / (df_norm[col].max() - df_norm[col].min())
     return df_norm
+
+def perform_factor_analysis(data: pd.DataFrame, analysis_type: str, n_factors: int, rotation: str, show_scree: bool):
+    """
+    Perform factor analysis based on the selected method.
+    analysis_type: 'EFA', 'PCA', or 'CFA'
+    n_factors: number of factors to extract
+    rotation: for EFA (e.g., 'varimax', 'oblimin', or 'none')
+    show_scree: if True, display a scree plot of eigenvalues.
+    Returns a dict with results.
+    """
+    results = {}
+    score_cols = [col for col in data.columns if col != "Text"]
+    X = data[score_cols].values
+
+    if analysis_type == "EFA":
+        try:
+            fa = FactorAnalyzer(n_factors=n_factors, rotation=rotation if rotation != "none" else None)
+            fa.fit(X)
+            eigenvalues, _ = fa.get_eigenvalues()
+            loadings = pd.DataFrame(fa.loadings_, index=score_cols)
+            results["eigenvalues"] = eigenvalues
+            results["loadings"] = loadings
+            if show_scree:
+                scree_fig = px.line(x=list(range(1, len(eigenvalues)+1)), y=eigenvalues,
+                                    markers=True, labels={'x': 'Factor', 'y': 'Eigenvalue'},
+                                    title="Scree Plot (EFA)")
+                results["scree_plot"] = scree_fig
+        except Exception as e:
+            st.error(f"EFA error: {e}")
+    elif analysis_type == "PCA":
+        try:
+            pca = PCA(n_components=n_factors)
+            pca.fit(X)
+            eigenvalues = pca.explained_variance_
+            loadings = pd.DataFrame(pca.components_.T, index=score_cols,
+                                    columns=[f"PC{i+1}" for i in range(n_factors)])
+            results["eigenvalues"] = eigenvalues
+            results["loadings"] = loadings
+            if show_scree:
+                scree_fig = px.line(x=list(range(1, len(eigenvalues)+1)), y=eigenvalues,
+                                    markers=True, labels={'x': 'Component', 'y': 'Eigenvalue'},
+                                    title="Scree Plot (PCA)")
+                results["scree_plot"] = scree_fig
+        except Exception as e:
+            st.error(f"PCA error: {e}")
+    elif analysis_type == "CFA":
+        st.error("Confirmatory Factor Analysis (CFA) is not implemented in this version.")
+    else:
+        st.error("Invalid factor analysis type selected.")
+    return results
 
 def add_footer() -> None:
     """Add a persistent footer to all pages."""
@@ -144,7 +223,7 @@ if "similarity_results" not in st.session_state:
     st.session_state.similarity_results = None
 
 # =============================================================================
-# Sidebar: Configuration Section
+# Sidebar: File Uploads and Configurations
 # =============================================================================
 st.sidebar.header("Configuration")
 
@@ -173,15 +252,13 @@ if text_file:
     except Exception as e:
         st.sidebar.error(f"Error loading text file: {e}")
 
-# Depending on the method, show scales interface
+# Depending on the method, show scales interface or interactive construct input.
 if scoring_method in ["Aggregated Items (Excel Upload)", "Item-by-item (Excel Upload)"]:
     st.sidebar.subheader("Upload Validated Scales (Excel)")
     scales_file = st.sidebar.file_uploader("Upload Excel file", type=["xlsx"], key="scales_file")
     if scales_file:
         try:
-            # Load scales data and computed reverse indices
             scales_data, reverse_items_dict = load_scales(scales_file)
-            # Allow user to review and adjust reverse items
             for scale, items in scales_data.items():
                 st.sidebar.write(f"Review reverse items for: {scale}")
                 df_preview = pd.DataFrame({"Index": list(range(len(items))), "Item": items})
@@ -199,7 +276,6 @@ if scoring_method in ["Aggregated Items (Excel Upload)", "Item-by-item (Excel Up
             st.sidebar.error(f"Error loading scales file: {e}")
 else:
     st.sidebar.subheader("Constructs (Interactive Input)")
-    # Interface to add a construct
     with st.sidebar.expander("Add a Construct", expanded=True):
         construct_name = st.text_input("Construct Name", key="construct_name")
         construct_text = st.text_area("Construct Text (paste entire construct text)", key="construct_text")
@@ -209,7 +285,6 @@ else:
                 st.success(f"Construct '{construct_name}' added.")
             else:
                 st.error("Please provide both name and text.")
-    # Allow removal of constructs
     with st.sidebar.expander("Manage Constructs", expanded=True):
         if st.session_state.constructs:
             construct_names = [c["name"] for c in st.session_state.constructs]
@@ -246,7 +321,7 @@ if st.session_state.get("model_instance") is None:
 # =============================================================================
 st.title("BERT-based Text Analysis Application")
 st.markdown("### Analysis Steps")
-st.write("Configure file uploads and scoring method in the sidebar. Then, proceed with analysis below.")
+st.write("Configure file uploads, scoring method, and factor analysis parameters in the sidebar. Then, proceed below.")
 
 # Step 1: Generate Text Embeddings
 st.markdown("---")
@@ -328,9 +403,36 @@ if st.button("Normalize Data", key="btn_normalize_data"):
         st.success("Data normalized successfully.")
         st.write(df_norm.head())
 
-# Step 5: Descriptive Statistics & Visualizations (Using Plotly)
+# Factor Analysis Customization Section
 st.markdown("---")
-st.header("Step 5: Descriptive Statistics & Visualizations")
+st.header("Step 5: Factor Analysis Customization")
+
+# User selections for factor analysis
+fa_type = st.selectbox("Choose factor analysis type:", options=["EFA", "PCA", "CFA"])
+n_factors = st.number_input("Number of factors/components:", min_value=1, max_value=20, value=2, step=1)
+rotation_method = st.selectbox("Rotation method (for EFA):", options=["varimax", "oblimin", "none"])
+show_scree = st.checkbox("Show scree plot", value=True)
+
+if st.button("Run Factor Analysis", key="btn_fa"):
+    if st.session_state.similarity_results is None:
+        st.error("Please compute similarity scores first.")
+    else:
+        fa_results = perform_factor_analysis(st.session_state.similarity_results,
+                                             analysis_type=fa_type,
+                                             n_factors=n_factors,
+                                             rotation=rotation_method,
+                                             show_scree=show_scree)
+        if fa_results:
+            st.subheader(f"Eigenvalues ({fa_type})")
+            st.write(fa_results.get("eigenvalues", "No eigenvalues returned."))
+            st.subheader(f"Loadings ({fa_type})")
+            st.write(fa_results.get("loadings", "No loadings returned."))
+            if show_scree and "scree_plot" in fa_results:
+                st.plotly_chart(fa_results["scree_plot"], use_container_width=True)
+
+# Step 6: Descriptive Statistics & Visualizations (Using Plotly)
+st.markdown("---")
+st.header("Step 6: Descriptive Statistics & Visualizations")
 if st.button("Show Descriptive Statistics & Visualizations", key="btn_desc_stats"):
     if st.session_state.similarity_results is None:
         st.error("Please compute similarity scores first.")
@@ -339,10 +441,7 @@ if st.button("Show Descriptive Statistics & Visualizations", key="btn_desc_stats
         st.subheader("Descriptive Statistics")
         st.write(df.describe())
         
-        # Determine score columns (excluding "Text")
         score_cols = [col for col in df.columns if col != "Text"]
-        
-        # Create interactive histograms with Plotly: five per row
         n_cols = 5
         n_plots = len(score_cols)
         n_rows = (n_plots + n_cols - 1) // n_cols
@@ -356,7 +455,6 @@ if st.button("Show Descriptive Statistics & Visualizations", key="btn_desc_stats
         fig_hist.update_layout(height=300 * n_rows, width=2000, title_text="Histograms", showlegend=False)
         st.plotly_chart(fig_hist, use_container_width=True)
         
-        # Create interactive correlation heatmap with Plotly (without numeric annotations)
         corr = df[score_cols].corr()
         heatmap_fig = go.Figure(data=go.Heatmap(
             z=corr.values,
@@ -369,9 +467,9 @@ if st.button("Show Descriptive Statistics & Visualizations", key="btn_desc_stats
         heatmap_fig.update_layout(title="Correlation Heatmap", xaxis_nticks=36)
         st.plotly_chart(heatmap_fig, use_container_width=True)
 
-# Step 6: Correlation Analysis
+# Step 7: Correlation Analysis
 st.markdown("---")
-st.header("Step 6: Correlation Analysis")
+st.header("Step 7: Correlation Analysis")
 if st.button("Run Correlation Analysis", key="btn_corr_analysis"):
     if st.session_state.similarity_results is None:
         st.error("Please compute similarity scores first.")
@@ -391,32 +489,7 @@ if st.button("Run Correlation Analysis", key="btn_corr_analysis"):
         fig_corr.update_layout(title="Correlation Matrix Heatmap", xaxis_nticks=36)
         st.plotly_chart(fig_corr, use_container_width=True)
 
-# Step 7: Exploratory Factor Analysis (EFA)
-st.markdown("---")
-st.header("Step 7: Exploratory Factor Analysis (EFA)")
-if st.button("Run Exploratory Factor Analysis (EFA)", key="btn_efa"):
-    if st.session_state.similarity_results is None:
-        st.error("Please compute similarity scores first.")
-    else:
-        import scipy
-        scipy.sum = np.sum  # Monkey patch for compatibility with Python 3.12+
-        df = st.session_state.similarity_results.copy()
-        score_cols = [col for col in df.columns if col != "Text"]
-        data_for_efa = df[score_cols]
-        try:
-            fa = FactorAnalyzer(n_factors=2, rotation="varimax")
-            fa.fit(data_for_efa)
-            eigenvalues, _ = fa.get_eigenvalues()
-            loadings = pd.DataFrame(fa.loadings_, index=score_cols)
-            st.subheader("Eigenvalues")
-            st.write(eigenvalues)
-            st.subheader("Factor Loadings")
-            st.write(loadings)
-        except Exception as e:
-            st.error(f"Error during factor analysis: {e}")
-
-st.markdown("---")
-st.write("Session State Keys:", list(st.session_state.keys()))
+# Remove session state keys printout for cleaner output
 
 # Add persistent footer
 add_footer()
