@@ -9,6 +9,18 @@ from scipy.stats import zscore
 from factor_analyzer import FactorAnalyzer
 import time
 
+def add_footer() -> None:
+    """Add a persistent footer to all pages"""
+    st.markdown("---")
+    st.markdown("### **Gabriele Di Cicco, PhD in Social Psychology**")
+    st.markdown("""
+    [GitHub](https://github.com/gdc0000) | 
+    [ORCID](https://orcid.org/0000-0002-1439-5790) | 
+    [LinkedIn](https://www.linkedin.com/in/gabriele-di-cicco-124067b0/)
+    """)
+
+
+
 # Set page configuration
 st.set_page_config(page_title="BERT-based Text Analysis Application", layout="wide")
 
@@ -277,3 +289,4 @@ if st.button("Run Exploratory Factor Analysis (EFA)", key="btn_efa"):
 
 st.markdown("---")
 st.write("Session State Keys:", list(st.session_state.keys()))
+add.footer()
