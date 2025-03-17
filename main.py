@@ -29,33 +29,6 @@ def load_text_data(file, file_type: str) -> pd.DataFrame:
     else:
         return pd.read_excel(file)
 
-@st.cache_data(show_spinner=False)
-def load_scales(file) -> (dict, dict):
-    """
-    Load validated scales from an Excel file.
-    Returns:
-        scales_data: Dict of scale_name -> list of items.
-        reverse_items_dict: Dict of scale_name -> list of computed reverse indices.
-    """
-    xls = pd.ExcelFile(file)
-    scales_data = {}
-    reverse_items_dict = {}
-    for sheet_name in xls.sheet_names:
-        df_sheet = pd.read_excel(xls, sheet_name=sheet_name)
-        if "Item" in df_sheet.columns and "Rev" in df_sheet.columns:
-            df_sheet = df_sheet.dropna(subset=["Item"])
-            items = df_sheet["Item"].tolist()
-            try:
-                computed_rev = [i for i, val in enumerate(df_sheet["Rev"].tolist()) if float(val) == 1.0]
-            except Exception as e:
-                st.sidebar.error(f"Error processing reverse items in sheet '{sheet_name}': {e}")
-                computed_rev = []
-            scales_data[sheet_name] = items
-            reverse_items_dict[sheet_name] = computed_rev
-        else:
-            st.sidebar.error(f"Sheet '{sheet_name}' must have both 'Item' and 'Rev' columns.")
-    return scales_data, reverse_items_dict
-
 @st.cache_resource(show_spinner=False)
 def get_model(model_name: str) -> SentenceTransformer:
     """Load and return the SentenceTransformer model."""
@@ -72,39 +45,37 @@ def generate_text_embeddings(model: SentenceTransformer, texts: list) -> torch.T
     return torch.stack(embeddings)
 
 def compute_similarity_scores(model: SentenceTransformer, text_embeddings: torch.Tensor,
-                              scales_data: dict, reverse_items: dict) -> pd.DataFrame:
+                              constructs: list) -> pd.DataFrame:
     """
-    Compute similarity scores between text embeddings and each scale item individually.
-    Returns a DataFrame with a column per scale item (e.g., "CN_1", "CN_2", ...).
+    Compute similarity scores between text embeddings and each construct.
+    Each construct is represented by a single text.
+    Returns a DataFrame with a column per construct.
     """
     results = {"Text": st.session_state.text_data[st.session_state.text_column].dropna().tolist()}
-    for scale, items in scales_data.items():
-        st.write(f"Processing scale: {scale}")
-        item_embeds = model.encode(items, convert_to_tensor=True)
-        sims = util.cos_sim(text_embeddings, item_embeds)
-        if scale in reverse_items:
-            rev_idx = reverse_items[scale]
-            sims[:, rev_idx] = 1 - sims[:, rev_idx]
-        sims_np = sims.cpu().numpy()
-        for j in range(sims_np.shape[1]):
-            col_name = f"{scale}_{j+1}"
-            results[col_name] = sims_np[:, j]
+    for construct in constructs:
+        name = construct["name"]
+        text = construct["text"]
+        # Compute embedding for the entire construct (unsqueeze to shape [1, dim])
+        construct_embed = model.encode(text, convert_to_tensor=True).unsqueeze(0)
+        sims = util.cos_sim(text_embeddings, construct_embed)  # shape: (n_texts, 1)
+        results[name] = sims.cpu().numpy().flatten()
+    # Ensure consistent lengths
     lengths = {key: len(val) for key, val in results.items()}
     if len(set(lengths.values())) > 1:
-        st.error("Mismatch in data lengths. Please ensure your text column has no missing values.")
+        st.error("Mismatch in data lengths. Please check your text data for missing values.")
         return None
     return pd.DataFrame(results)
 
 def exclude_outliers(df: pd.DataFrame) -> pd.DataFrame:
     """Exclude rows with z-scores greater than 3 in any similarity score column."""
-    score_cols = [col for col in df.columns if "_" in col and col != "Text"]
+    score_cols = [col for col in df.columns if col != "Text"]
     z_scores = df[score_cols].apply(zscore)
     mask = (np.abs(z_scores) <= 3).all(axis=1)
     return df[mask]
 
 def normalize_data(df: pd.DataFrame) -> pd.DataFrame:
     """Apply Min-Max normalization to similarity score columns."""
-    score_cols = [col for col in df.columns if "_" in col and col != "Text"]
+    score_cols = [col for col in df.columns if col != "Text"]
     df_norm = df.copy()
     for col in score_cols:
         df_norm[col] = (df_norm[col] - df_norm[col].min()) / (df_norm[col].max() - df_norm[col].min())
@@ -119,6 +90,14 @@ def add_footer() -> None:
     [ORCID](https://orcid.org/0000-0002-1439-5790) | 
     [LinkedIn](https://www.linkedin.com/in/gabriele-di-cicco-124067b0/)
     """)
+
+# =============================================================================
+# Session State Initialization
+# =============================================================================
+if "constructs" not in st.session_state:
+    st.session_state.constructs = []  # List of dicts with keys: "name", "text"
+if "similarity_results" not in st.session_state:
+    st.session_state.similarity_results = None
 
 # =============================================================================
 # Sidebar: File Uploads and Configurations
@@ -138,27 +117,25 @@ if text_file:
     except Exception as e:
         st.sidebar.error(f"Error loading text file: {e}")
 
-# Upload Validated Scales
-scales_file = st.sidebar.file_uploader("Upload Validated Scales (Excel with sheets per construct)", type=["xlsx"], key="scales_file")
-if scales_file:
-    try:
-        scales_data, reverse_items_dict = load_scales(scales_file)
-        # For each scale, allow user to review and adjust reverse items.
-        for scale, items in scales_data.items():
-            st.sidebar.write(f"Review reverse items for scale: {scale}")
-            df_preview = pd.DataFrame({"Index": list(range(len(items))), "Item": items})
-            st.sidebar.dataframe(df_preview)
-            user_rev = st.sidebar.multiselect(
-                f"Select reverse item indices for {scale}",
-                options=list(range(len(items))),
-                default=reverse_items_dict[scale],
-                key=f"rev_{scale}"
-            )
-            reverse_items_dict[scale] = user_rev
-        st.session_state.scales_data = scales_data
-        st.session_state.reverse_items = reverse_items_dict
-    except Exception as e:
-        st.sidebar.error(f"Error loading scales file: {e}")
+# Construct Management Section
+st.sidebar.header("Constructs (max 10)")
+if len(st.session_state.constructs) < 10:
+    with st.sidebar.expander("Add a Construct", expanded=True):
+        construct_name = st.text_input("Construct Name", key="construct_name")
+        construct_text = st.text_area("Construct Text (paste all items together)", key="construct_text")
+        if st.button("Add Construct", key="btn_add_construct"):
+            if construct_name and construct_text:
+                st.session_state.constructs.append({"name": construct_name, "text": construct_text})
+                st.success(f"Construct '{construct_name}' added.")
+            else:
+                st.error("Please provide both a name and text for the construct.")
+else:
+    st.sidebar.info("Maximum of 10 constructs reached.")
+    
+if st.session_state.constructs:
+    st.sidebar.write("Current Constructs:")
+    for c in st.session_state.constructs:
+        st.sidebar.write(f"- **{c['name']}**")
 
 # Model Selection
 st.sidebar.subheader("Select Embedding Model")
@@ -181,7 +158,7 @@ if st.session_state.get("model_instance") is None:
 # =============================================================================
 st.title("BERT-based Text Analysis Application")
 st.markdown("### Analysis Steps")
-st.write("Configure file uploads and options in the sidebar. Then, proceed with the analysis below.")
+st.write("Configure file uploads and add constructs in the sidebar. Then, proceed with the analysis below.")
 
 # Step 1: Generate Text Embeddings
 st.markdown("---")
@@ -197,12 +174,12 @@ if st.button("Generate Text Embeddings", key="btn_gen_text_embed"):
         st.success("Text embeddings generated successfully.")
         st.write("Embeddings shape:", embeddings.shape)
 
-# Step 2: Compute Similarity Scores for Scales (Item-by-Item)
+# Step 2: Compute Similarity Scores for Constructs
 st.markdown("---")
-st.header("Step 2: Compute Similarity Scores for Scales (Item-by-Item)")
+st.header("Step 2: Compute Similarity Scores for Constructs")
 if st.button("Compute Similarity Scores", key="btn_compute_sim"):
-    if not st.session_state.scales_data:
-        st.error("Please upload the validated scales file in the sidebar.")
+    if not st.session_state.constructs:
+        st.error("Please add at least one construct in the sidebar.")
     elif st.session_state.text_embeddings is None:
         st.error("Please generate text embeddings first.")
     else:
@@ -210,8 +187,7 @@ if st.button("Compute Similarity Scores", key="btn_compute_sim"):
             sim_df = compute_similarity_scores(
                 st.session_state.model_instance,
                 st.session_state.text_embeddings,
-                st.session_state.scales_data,
-                st.session_state.reverse_items
+                st.session_state.constructs
             )
         if sim_df is not None:
             st.session_state.similarity_results = sim_df
@@ -254,10 +230,10 @@ if st.button("Show Descriptive Statistics & Visualizations", key="btn_desc_stats
         st.subheader("Descriptive Statistics")
         st.write(df.describe())
         
-        # Determine the score columns (excluding the "Text" column)
-        score_cols = [col for col in df.columns if "_" in col and col != "Text"]
+        # Determine score columns (excluding "Text")
+        score_cols = [col for col in df.columns if col != "Text"]
         
-        # Create interactive histograms with Plotly: arrange five per row
+        # Create interactive histograms with Plotly: five per row
         n_cols = 5
         n_plots = len(score_cols)
         n_rows = (n_plots + n_cols - 1) // n_cols
@@ -271,7 +247,7 @@ if st.button("Show Descriptive Statistics & Visualizations", key="btn_desc_stats
         fig_hist.update_layout(height=300 * n_rows, width=2000, title_text="Histograms", showlegend=False)
         st.plotly_chart(fig_hist, use_container_width=True)
         
-        # Create interactive correlation heatmap with Plotly (without annotations)
+        # Create interactive correlation heatmap with Plotly (without numeric annotations)
         corr = df[score_cols].corr()
         heatmap_fig = go.Figure(data=go.Heatmap(
             z=corr.values,
@@ -292,7 +268,7 @@ if st.button("Run Correlation Analysis", key="btn_corr_analysis"):
         st.error("Please compute similarity scores first.")
     else:
         df = st.session_state.similarity_results.copy()
-        score_cols = [col for col in df.columns if "_" in col and col != "Text"]
+        score_cols = [col for col in df.columns if col != "Text"]
         corr_matrix = df[score_cols].corr()
         st.subheader("Correlation Matrix")
         st.dataframe(corr_matrix)
@@ -314,9 +290,9 @@ if st.button("Run Exploratory Factor Analysis (EFA)", key="btn_efa"):
         st.error("Please compute similarity scores first.")
     else:
         import scipy
-        scipy.sum = np.sum  # Monkey patch for compatibility with Python 3.12+
+        scipy.sum = np.sum  # Monkey patch for Python 3.12+ compatibility
         df = st.session_state.similarity_results.copy()
-        score_cols = [col for col in df.columns if "_" in col and col != "Text"]
+        score_cols = [col for col in df.columns if col != "Text"]
         data_for_efa = df[score_cols]
         try:
             fa = FactorAnalyzer(n_factors=2, rotation="varimax")
