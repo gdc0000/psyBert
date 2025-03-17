@@ -59,7 +59,6 @@ def compute_similarity_scores(model: SentenceTransformer, text_embeddings: torch
         construct_embed = model.encode(text, convert_to_tensor=True).unsqueeze(0)
         sims = util.cos_sim(text_embeddings, construct_embed)  # shape: (n_texts, 1)
         results[name] = sims.cpu().numpy().flatten()
-    # Ensure consistent lengths
     lengths = {key: len(val) for key, val in results.items()}
     if len(set(lengths.values())) > 1:
         st.error("Mismatch in data lengths. Please check your text data for missing values.")
@@ -95,7 +94,7 @@ def add_footer() -> None:
 # Session State Initialization
 # =============================================================================
 if "constructs" not in st.session_state:
-    st.session_state.constructs = []  # List of dicts with keys: "name", "text"
+    st.session_state.constructs = []  # List of dicts: {"name": ..., "text": ...}
 if "similarity_results" not in st.session_state:
     st.session_state.similarity_results = None
 
@@ -119,19 +118,28 @@ if text_file:
 
 # Construct Management Section
 st.sidebar.header("Constructs (max 10)")
-if len(st.session_state.constructs) < 10:
-    with st.sidebar.expander("Add a Construct", expanded=True):
-        construct_name = st.text_input("Construct Name", key="construct_name")
-        construct_text = st.text_area("Construct Text (paste all items together)", key="construct_text")
-        if st.button("Add Construct", key="btn_add_construct"):
-            if construct_name and construct_text:
-                st.session_state.constructs.append({"name": construct_name, "text": construct_text})
-                st.success(f"Construct '{construct_name}' added.")
-            else:
-                st.error("Please provide both a name and text for the construct.")
-else:
-    st.sidebar.info("Maximum of 10 constructs reached.")
-    
+
+with st.sidebar.expander("Add a Construct", expanded=True):
+    construct_name = st.text_input("Construct Name", key="construct_name")
+    construct_text = st.text_area("Construct Text (paste all items together)", key="construct_text")
+    if st.button("Add Construct", key="btn_add_construct"):
+        if construct_name and construct_text:
+            st.session_state.constructs.append({"name": construct_name, "text": construct_text})
+            st.success(f"Construct '{construct_name}' added.")
+        else:
+            st.error("Please provide both a name and text for the construct.")
+
+with st.sidebar.expander("Manage Constructs", expanded=True):
+    if st.session_state.constructs:
+        construct_names = [c["name"] for c in st.session_state.constructs]
+        constructs_to_remove = st.multiselect("Select constructs to remove", construct_names, key="remove_constructs")
+        if st.button("Remove Selected Constructs", key="btn_remove_constructs"):
+            st.session_state.constructs = [c for c in st.session_state.constructs if c["name"] not in constructs_to_remove]
+            st.success("Selected constructs removed.")
+            st.experimental_rerun()
+    else:
+        st.info("No constructs added yet.")
+
 if st.session_state.constructs:
     st.sidebar.write("Current Constructs:")
     for c in st.session_state.constructs:
