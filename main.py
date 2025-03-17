@@ -258,20 +258,27 @@ if scoring_method in ["Aggregated Items (Excel Upload)", "Item-by-item (Excel Up
     scales_file = st.sidebar.file_uploader("Upload Excel file", type=["xlsx"], key="scales_file")
     if scales_file:
         try:
-            scales_data, reverse_items_dict = load_scales(scales_file)
-            for scale, items in scales_data.items():
+            all_scales_data, all_reverse_items_dict = load_scales(scales_file)
+            # Provide a multiselect menu to choose which scales to include
+            available_scales = list(all_scales_data.keys())
+            selected_scales = st.sidebar.multiselect("Select scales to include", options=available_scales, default=available_scales, key="selected_scales")
+            selected_scales_data = {}
+            selected_reverse_items = {}
+            for scale in selected_scales:
+                items = all_scales_data[scale]
                 st.sidebar.write(f"Review reverse items for: {scale}")
                 df_preview = pd.DataFrame({"Index": list(range(len(items))), "Item": items})
                 st.sidebar.dataframe(df_preview)
                 user_rev = st.sidebar.multiselect(
                     f"Select reverse item indices for {scale}",
                     options=list(range(len(items))),
-                    default=reverse_items_dict[scale],
+                    default=all_reverse_items_dict[scale],
                     key=f"rev_{scale}"
                 )
-                reverse_items_dict[scale] = user_rev
-            st.session_state.scales_data = scales_data
-            st.session_state.reverse_items = reverse_items_dict
+                selected_scales_data[scale] = items
+                selected_reverse_items[scale] = user_rev
+            st.session_state.scales_data = selected_scales_data
+            st.session_state.reverse_items = selected_reverse_items
         except Exception as e:
             st.sidebar.error(f"Error loading scales file: {e}")
 else:
@@ -321,7 +328,7 @@ if st.session_state.get("model_instance") is None:
 # =============================================================================
 st.title("BERT-based Text Analysis Application")
 st.markdown("### Analysis Steps")
-st.write("Configure file uploads, scoring method, and factor analysis parameters in the sidebar. Then, proceed below.")
+st.write("Configure file uploads and scoring method in the sidebar. Then, proceed with analysis below.")
 
 # Step 1: Generate Text Embeddings
 st.markdown("---")
@@ -406,8 +413,6 @@ if st.button("Normalize Data", key="btn_normalize_data"):
 # Factor Analysis Customization Section
 st.markdown("---")
 st.header("Step 5: Factor Analysis Customization")
-
-# User selections for factor analysis
 fa_type = st.selectbox("Choose factor analysis type:", options=["EFA", "PCA", "CFA"])
 n_factors = st.number_input("Number of factors/components:", min_value=1, max_value=20, value=2, step=1)
 rotation_method = st.selectbox("Rotation method (for EFA):", options=["varimax", "oblimin", "none"])
@@ -488,8 +493,6 @@ if st.button("Run Correlation Analysis", key="btn_corr_analysis"):
         ))
         fig_corr.update_layout(title="Correlation Matrix Heatmap", xaxis_nticks=36)
         st.plotly_chart(fig_corr, use_container_width=True)
-
-# Remove session state keys printout for cleaner output
 
 # Add persistent footer
 add_footer()
