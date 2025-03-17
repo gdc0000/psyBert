@@ -146,7 +146,7 @@ if st.button("Generate Text Embeddings", key="btn_gen_text_embed"):
         st.write("Embeddings shape:", st.session_state.text_embeddings.shape)
 
 st.markdown("---")
-st.header("Step 2: Compute Similarity Scores for Scales")
+st.header("Step 2: Compute Similarity Scores for Scales (Item-by-Item)")
 if st.button("Compute Similarity Scores", key="btn_compute_sim"):
     if not st.session_state.scales_data:
         st.error("Please upload the validated scales file in the sidebar.")
@@ -164,10 +164,11 @@ if st.button("Compute Similarity Scores", key="btn_compute_sim"):
             if scale in st.session_state.reverse_items:
                 rev_idx = st.session_state.reverse_items[scale]
                 sims[:, rev_idx] = 1 - sims[:, rev_idx]
-            # Aggregate by averaging across the items
-            agg_scores = sims.cpu().numpy().mean(axis=1)
-            results[f"{scale}_score"] = agg_scores
-
+            sims_np = sims.cpu().numpy()  # shape: (n_texts, n_items)
+            # Instead of aggregating, output each item separately.
+            for j in range(sims_np.shape[1]):
+                col_name = f"{scale}_{j+1}"
+                results[col_name] = sims_np[:, j]
         # Debug: Check lengths to ensure consistency
         lengths = {key: len(val) for key, val in results.items()}
         st.write("Array lengths in results:", lengths)
@@ -185,7 +186,7 @@ if st.button("Exclude Outliers", key="btn_exclude_outliers"):
         st.error("Please compute similarity scores first.")
     else:
         df = st.session_state.similarity_results.copy()
-        score_cols = [col for col in df.columns if col.endswith("_score")]
+        score_cols = [col for col in df.columns if "_" in col and col != "Text"]
         z_scores = df[score_cols].apply(zscore)
         mask = (np.abs(z_scores) <= 3).all(axis=1)
         df_no_outliers = df[mask]
@@ -201,7 +202,7 @@ if st.button("Normalize Data", key="btn_normalize_data"):
         st.error("Please compute similarity scores first.")
     else:
         df = st.session_state.similarity_results.copy()
-        score_cols = [col for col in df.columns if col.endswith("_score")]
+        score_cols = [col for col in df.columns if "_" in col and col != "Text"]
         df_norm = df.copy()
         for col in score_cols:
             df_norm[col] = (df_norm[col] - df_norm[col].min()) / (df_norm[col].max() - df_norm[col].min())
@@ -219,7 +220,7 @@ if st.button("Show Descriptive Statistics & Visualizations", key="btn_desc_stats
         st.subheader("Descriptive Statistics")
         st.write(df.describe())
         
-        score_cols = [col for col in df.columns if col.endswith("_score")]
+        score_cols = [col for col in df.columns if "_" in col and col != "Text"]
         st.subheader("Histograms")
         for col in score_cols:
             fig, ax = plt.subplots()
@@ -240,7 +241,7 @@ if st.button("Run Correlation Analysis", key="btn_corr_analysis"):
         st.error("Please compute similarity scores first.")
     else:
         df = st.session_state.similarity_results.copy()
-        score_cols = [col for col in df.columns if col.endswith("_score")]
+        score_cols = [col for col in df.columns if "_" in col and col != "Text"]
         corr_matrix = df[score_cols].corr()
         st.subheader("Correlation Matrix")
         st.dataframe(corr_matrix)
@@ -259,7 +260,7 @@ if st.button("Run Exploratory Factor Analysis (EFA)", key="btn_efa"):
         scipy.sum = np.sum
         
         df = st.session_state.similarity_results.copy()
-        score_cols = [col for col in df.columns if col.endswith("_score")]
+        score_cols = [col for col in df.columns if "_" in col and col != "Text"]
         data_for_efa = df[score_cols]
         try:
             fa = FactorAnalyzer(n_factors=2, rotation="varimax")
