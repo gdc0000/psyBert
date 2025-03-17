@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.INFO)
 st.set_page_config(page_title="BERT-based Text Analysis Application", layout="wide")
 
 # =============================================================================
-# Helper Functions (with caching for expensive operations)
+# Helper Functions (with caching)
 # =============================================================================
 
 @st.cache_data(show_spinner=False)
@@ -35,7 +35,7 @@ def get_model(model_name: str) -> SentenceTransformer:
     return SentenceTransformer(model_name)
 
 def generate_text_embeddings(model: SentenceTransformer, texts: list) -> torch.Tensor:
-    """Generate embeddings for the provided texts using the given model."""
+    """Generate embeddings for provided texts."""
     embeddings = []
     progress_bar = st.progress(0)
     for i, text in enumerate(texts):
@@ -44,20 +44,65 @@ def generate_text_embeddings(model: SentenceTransformer, texts: list) -> torch.T
         time.sleep(0.01)  # Simulate delay for UX
     return torch.stack(embeddings)
 
-def compute_similarity_scores(model: SentenceTransformer, text_embeddings: torch.Tensor,
-                              constructs: list) -> pd.DataFrame:
+def compute_similarity_scores_aggregated(model: SentenceTransformer, text_embeddings: torch.Tensor,
+                                           scales_data: dict, reverse_items: dict) -> pd.DataFrame:
     """
-    Compute similarity scores between text embeddings and each construct.
-    Each construct is represented by a single text.
-    Returns a DataFrame with a column per construct.
+    Method 1: For each construct (Excel sheet), embed each item,
+    apply reverse scoring if needed, and average the similarity scores.
+    Returns one similarity score per construct.
+    """
+    results = {"Text": st.session_state.text_data[st.session_state.text_column].dropna().tolist()}
+    for scale, items in scales_data.items():
+        item_scores = []
+        for i, item in enumerate(items):
+            item_embed = model.encode(item, convert_to_tensor=True)
+            sims = util.cos_sim(text_embeddings, item_embed.unsqueeze(0))  # shape: (n_texts, 1)
+            sims_np = sims.cpu().numpy().flatten()
+            if i in reverse_items.get(scale, []):
+                sims_np = 1 - sims_np
+            item_scores.append(sims_np)
+        aggregated = np.mean(np.array(item_scores), axis=0)
+        results[scale] = aggregated
+    lengths = {key: len(val) for key, val in results.items()}
+    if len(set(lengths.values())) > 1:
+        st.error("Mismatch in data lengths. Please check your text data for missing values.")
+        return None
+    return pd.DataFrame(results)
+
+def compute_similarity_scores_item_by_item(model: SentenceTransformer, text_embeddings: torch.Tensor,
+                                             scales_data: dict, reverse_items: dict) -> pd.DataFrame:
+    """
+    Method 2: For each construct (Excel sheet), embed each item separately,
+    apply reverse scoring if needed, and output a separate similarity score column for each item.
+    """
+    results = {"Text": st.session_state.text_data[st.session_state.text_column].dropna().tolist()}
+    for scale, items in scales_data.items():
+        for i, item in enumerate(items):
+            item_embed = model.encode(item, convert_to_tensor=True)
+            sims = util.cos_sim(text_embeddings, item_embed.unsqueeze(0))
+            sims_np = sims.cpu().numpy().flatten()
+            if i in reverse_items.get(scale, []):
+                sims_np = 1 - sims_np
+            col_name = f"{scale}_{i+1}"
+            results[col_name] = sims_np
+    lengths = {key: len(val) for key, val in results.items()}
+    if len(set(lengths.values())) > 1:
+        st.error("Mismatch in data lengths. Please check your text data for missing values.")
+        return None
+    return pd.DataFrame(results)
+
+def compute_similarity_scores_single(model: SentenceTransformer, text_embeddings: torch.Tensor,
+                                       constructs: list) -> pd.DataFrame:
+    """
+    Method 3: For each construct added interactively, embed the entire construct text as one block.
+    Returns one similarity score per construct.
     """
     results = {"Text": st.session_state.text_data[st.session_state.text_column].dropna().tolist()}
     for construct in constructs:
         name = construct["name"]
         text = construct["text"]
-        # Compute embedding for the entire construct (unsqueeze to shape [1, dim])
         construct_embed = model.encode(text, convert_to_tensor=True).unsqueeze(0)
-        sims = util.cos_sim(text_embeddings, construct_embed)  # shape: (n_texts, 1)
+        sims = util.cos_sim(text_embeddings, construct_embed)
         results[name] = sims.cpu().numpy().flatten()
     lengths = {key: len(val) for key, val in results.items()}
     if len(set(lengths.values())) > 1:
@@ -66,7 +111,7 @@ def compute_similarity_scores(model: SentenceTransformer, text_embeddings: torch
     return pd.DataFrame(results)
 
 def exclude_outliers(df: pd.DataFrame) -> pd.DataFrame:
-    """Exclude rows with z-scores greater than 3 in any similarity score column."""
+    """Exclude rows with z-scores greater than 3."""
     score_cols = [col for col in df.columns if col != "Text"]
     z_scores = df[score_cols].apply(zscore)
     mask = (np.abs(z_scores) <= 3).all(axis=1)
@@ -94,14 +139,26 @@ def add_footer() -> None:
 # Session State Initialization
 # =============================================================================
 if "constructs" not in st.session_state:
-    st.session_state.constructs = []  # List of dicts: {"name": ..., "text": ...}
+    st.session_state.constructs = []  # For method 3: interactive constructs
 if "similarity_results" not in st.session_state:
     st.session_state.similarity_results = None
 
 # =============================================================================
-# Sidebar: File Uploads and Configurations
+# Sidebar: Configuration Section
 # =============================================================================
-st.sidebar.header("File Uploads and Configuration")
+st.sidebar.header("Configuration")
+
+# Scoring Method Selection
+scoring_method = st.sidebar.radio(
+    "Choose scoring method:",
+    options=[
+        "Aggregated Items (Excel Upload)",
+        "Item-by-item (Excel Upload)",
+        "Single Construct (Interactive Input)"
+    ],
+    key="scoring_method"
+)
+st.session_state.method = scoring_method
 
 # Upload Text Data
 text_file = st.sidebar.file_uploader("Upload Text Data (CSV or Excel)", type=["csv", "xlsx"], key="text_file")
@@ -116,34 +173,57 @@ if text_file:
     except Exception as e:
         st.sidebar.error(f"Error loading text file: {e}")
 
-# Construct Management Section
-st.sidebar.header("Constructs (max 10)")
-
-with st.sidebar.expander("Add a Construct", expanded=True):
-    construct_name = st.text_input("Construct Name", key="construct_name")
-    construct_text = st.text_area("Construct Text (paste all items together)", key="construct_text")
-    if st.button("Add Construct", key="btn_add_construct"):
-        if construct_name and construct_text:
-            st.session_state.constructs.append({"name": construct_name, "text": construct_text})
-            st.success(f"Construct '{construct_name}' added.")
+# Depending on the method, show scales interface
+if scoring_method in ["Aggregated Items (Excel Upload)", "Item-by-item (Excel Upload)"]:
+    st.sidebar.subheader("Upload Validated Scales (Excel)")
+    scales_file = st.sidebar.file_uploader("Upload Excel file", type=["xlsx"], key="scales_file")
+    if scales_file:
+        try:
+            # Load scales data and computed reverse indices
+            scales_data, reverse_items_dict = load_scales(scales_file)
+            # Allow user to review and adjust reverse items
+            for scale, items in scales_data.items():
+                st.sidebar.write(f"Review reverse items for: {scale}")
+                df_preview = pd.DataFrame({"Index": list(range(len(items))), "Item": items})
+                st.sidebar.dataframe(df_preview)
+                user_rev = st.sidebar.multiselect(
+                    f"Select reverse item indices for {scale}",
+                    options=list(range(len(items))),
+                    default=reverse_items_dict[scale],
+                    key=f"rev_{scale}"
+                )
+                reverse_items_dict[scale] = user_rev
+            st.session_state.scales_data = scales_data
+            st.session_state.reverse_items = reverse_items_dict
+        except Exception as e:
+            st.sidebar.error(f"Error loading scales file: {e}")
+else:
+    st.sidebar.subheader("Constructs (Interactive Input)")
+    # Interface to add a construct
+    with st.sidebar.expander("Add a Construct", expanded=True):
+        construct_name = st.text_input("Construct Name", key="construct_name")
+        construct_text = st.text_area("Construct Text (paste entire construct text)", key="construct_text")
+        if st.button("Add Construct", key="btn_add_construct"):
+            if construct_name and construct_text:
+                st.session_state.constructs.append({"name": construct_name, "text": construct_text})
+                st.success(f"Construct '{construct_name}' added.")
+            else:
+                st.error("Please provide both name and text.")
+    # Allow removal of constructs
+    with st.sidebar.expander("Manage Constructs", expanded=True):
+        if st.session_state.constructs:
+            construct_names = [c["name"] for c in st.session_state.constructs]
+            constructs_to_remove = st.multiselect("Select constructs to remove", construct_names, key="remove_constructs")
+            if st.button("Remove Selected Constructs", key="btn_remove_constructs"):
+                st.session_state.constructs = [c for c in st.session_state.constructs if c["name"] not in constructs_to_remove]
+                st.success("Selected constructs removed.")
+                st.experimental_rerun()
         else:
-            st.error("Please provide both a name and text for the construct.")
-
-with st.sidebar.expander("Manage Constructs", expanded=True):
+            st.info("No constructs added yet.")
     if st.session_state.constructs:
-        construct_names = [c["name"] for c in st.session_state.constructs]
-        constructs_to_remove = st.multiselect("Select constructs to remove", construct_names, key="remove_constructs")
-        if st.button("Remove Selected Constructs", key="btn_remove_constructs"):
-            st.session_state.constructs = [c for c in st.session_state.constructs if c["name"] not in constructs_to_remove]
-            st.success("Selected constructs removed.")
-            st.experimental_rerun()
-    else:
-        st.info("No constructs added yet.")
-
-if st.session_state.constructs:
-    st.sidebar.write("Current Constructs:")
-    for c in st.session_state.constructs:
-        st.sidebar.write(f"- **{c['name']}**")
+        st.sidebar.write("Current Constructs:")
+        for c in st.session_state.constructs:
+            st.sidebar.write(f"- **{c['name']}**")
 
 # Model Selection
 st.sidebar.subheader("Select Embedding Model")
@@ -166,14 +246,14 @@ if st.session_state.get("model_instance") is None:
 # =============================================================================
 st.title("BERT-based Text Analysis Application")
 st.markdown("### Analysis Steps")
-st.write("Configure file uploads and add constructs in the sidebar. Then, proceed with the analysis below.")
+st.write("Configure file uploads and scoring method in the sidebar. Then, proceed with analysis below.")
 
 # Step 1: Generate Text Embeddings
 st.markdown("---")
 st.header("Step 1: Generate Text Embeddings")
 if st.button("Generate Text Embeddings", key="btn_gen_text_embed"):
     if st.session_state.text_data is None or st.session_state.text_column is None:
-        st.error("Please upload your text data and select the textual column in the sidebar.")
+        st.error("Please upload text data and select the textual column in the sidebar.")
     else:
         texts = st.session_state.text_data[st.session_state.text_column].dropna().tolist()
         with st.spinner("Generating text embeddings..."):
@@ -182,21 +262,42 @@ if st.button("Generate Text Embeddings", key="btn_gen_text_embed"):
         st.success("Text embeddings generated successfully.")
         st.write("Embeddings shape:", embeddings.shape)
 
-# Step 2: Compute Similarity Scores for Constructs
+# Step 2: Compute Similarity Scores
 st.markdown("---")
-st.header("Step 2: Compute Similarity Scores for Constructs")
+st.header("Step 2: Compute Similarity Scores")
 if st.button("Compute Similarity Scores", key="btn_compute_sim"):
-    if not st.session_state.constructs:
-        st.error("Please add at least one construct in the sidebar.")
-    elif st.session_state.text_embeddings is None:
+    if st.session_state.text_embeddings is None:
         st.error("Please generate text embeddings first.")
     else:
-        with st.spinner("Computing similarity scores..."):
-            sim_df = compute_similarity_scores(
-                st.session_state.model_instance,
-                st.session_state.text_embeddings,
-                st.session_state.constructs
-            )
+        if st.session_state.method in ["Aggregated Items (Excel Upload)", "Item-by-item (Excel Upload)"]:
+            if not st.session_state.scales_data:
+                st.error("Please upload validated scales (Excel file) in the sidebar.")
+            else:
+                with st.spinner("Computing similarity scores..."):
+                    if st.session_state.method == "Aggregated Items (Excel Upload)":
+                        sim_df = compute_similarity_scores_aggregated(
+                            st.session_state.model_instance,
+                            st.session_state.text_embeddings,
+                            st.session_state.scales_data,
+                            st.session_state.reverse_items
+                        )
+                    else:
+                        sim_df = compute_similarity_scores_item_by_item(
+                            st.session_state.model_instance,
+                            st.session_state.text_embeddings,
+                            st.session_state.scales_data,
+                            st.session_state.reverse_items
+                        )
+        else:  # Single Construct (Interactive Input)
+            if not st.session_state.constructs:
+                st.error("Please add at least one construct in the sidebar.")
+            else:
+                with st.spinner("Computing similarity scores..."):
+                    sim_df = compute_similarity_scores_single(
+                        st.session_state.model_instance,
+                        st.session_state.text_embeddings,
+                        st.session_state.constructs
+                    )
         if sim_df is not None:
             st.session_state.similarity_results = sim_df
             st.success("Similarity scores computed and compiled.")
@@ -298,7 +399,7 @@ if st.button("Run Exploratory Factor Analysis (EFA)", key="btn_efa"):
         st.error("Please compute similarity scores first.")
     else:
         import scipy
-        scipy.sum = np.sum  # Monkey patch for Python 3.12+ compatibility
+        scipy.sum = np.sum  # Monkey patch for compatibility with Python 3.12+
         df = st.session_state.similarity_results.copy()
         score_cols = [col for col in df.columns if col != "Text"]
         data_for_efa = df[score_cols]
