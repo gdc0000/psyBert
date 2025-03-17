@@ -3,12 +3,13 @@ import pandas as pd
 import numpy as np
 import torch
 from sentence_transformers import SentenceTransformer, util
-import matplotlib.pyplot as plt
-import seaborn as sns
-from scipy.stats import zscore
-from factor_analyzer import FactorAnalyzer
 import time
 import logging
+from scipy.stats import zscore
+from factor_analyzer import FactorAnalyzer
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # Configure logging for debugging purposes
 logging.basicConfig(level=logging.INFO)
@@ -88,7 +89,6 @@ def compute_similarity_scores(model: SentenceTransformer, text_embeddings: torch
         for j in range(sims_np.shape[1]):
             col_name = f"{scale}_{j+1}"
             results[col_name] = sims_np[:, j]
-    # Check if all result arrays have the same length
     lengths = {key: len(val) for key, val in results.items()}
     if len(set(lengths.values())) > 1:
         st.error("Mismatch in data lengths. Please ensure your text column has no missing values.")
@@ -121,12 +121,6 @@ def add_footer() -> None:
     """)
 
 # =============================================================================
-# Session State Initialization
-# =============================================================================
-if "similarity_results" not in st.session_state:
-    st.session_state.similarity_results = None
-
-# =============================================================================
 # Sidebar: File Uploads and Configurations
 # =============================================================================
 st.sidebar.header("File Uploads and Configuration")
@@ -149,7 +143,7 @@ scales_file = st.sidebar.file_uploader("Upload Validated Scales (Excel with shee
 if scales_file:
     try:
         scales_data, reverse_items_dict = load_scales(scales_file)
-        # For each scale, allow the user to review and adjust reverse items.
+        # For each scale, allow user to review and adjust reverse items.
         for scale, items in scales_data.items():
             st.sidebar.write(f"Review reverse items for scale: {scale}")
             df_preview = pd.DataFrame({"Index": list(range(len(items))), "Item": items})
@@ -249,7 +243,7 @@ if st.button("Normalize Data", key="btn_normalize_data"):
         st.success("Data normalized successfully.")
         st.write(df_norm.head())
 
-# Step 5: Descriptive Statistics & Visualizations
+# Step 5: Descriptive Statistics & Visualizations (Using Plotly)
 st.markdown("---")
 st.header("Step 5: Descriptive Statistics & Visualizations")
 if st.button("Show Descriptive Statistics & Visualizations", key="btn_desc_stats"):
@@ -260,18 +254,35 @@ if st.button("Show Descriptive Statistics & Visualizations", key="btn_desc_stats
         st.subheader("Descriptive Statistics")
         st.write(df.describe())
         
+        # Determine the score columns (excluding the "Text" column)
         score_cols = [col for col in df.columns if "_" in col and col != "Text"]
-        st.subheader("Histograms")
-        for col in score_cols:
-            fig, ax = plt.subplots()
-            sns.histplot(df[col], kde=True, bins=30, ax=ax)
-            ax.set_title(f"Histogram of {col}")
-            st.pyplot(fig)
         
-        st.subheader("Correlation Heatmap")
-        fig, ax = plt.subplots(figsize=(8, 6))
-        sns.heatmap(df[score_cols].corr(), annot=True, cmap="coolwarm", fmt=".2f", ax=ax)
-        st.pyplot(fig)
+        # Create interactive histograms with Plotly: arrange five per row
+        n_cols = 5
+        n_plots = len(score_cols)
+        n_rows = (n_plots + n_cols - 1) // n_cols
+        fig_hist = make_subplots(rows=n_rows, cols=n_cols, subplot_titles=score_cols)
+        for idx, col in enumerate(score_cols):
+            row = (idx // n_cols) + 1
+            col_idx = (idx % n_cols) + 1
+            hist_fig = px.histogram(df, x=col, nbins=30)
+            for trace in hist_fig.data:
+                fig_hist.add_trace(trace, row=row, col=col_idx)
+        fig_hist.update_layout(height=300 * n_rows, width=2000, title_text="Histograms", showlegend=False)
+        st.plotly_chart(fig_hist, use_container_width=True)
+        
+        # Create interactive correlation heatmap with Plotly (without annotations)
+        corr = df[score_cols].corr()
+        heatmap_fig = go.Figure(data=go.Heatmap(
+            z=corr.values,
+            x=corr.columns,
+            y=corr.index,
+            colorscale='Viridis',
+            showscale=True,
+            hoverinfo='x+y+z'
+        ))
+        heatmap_fig.update_layout(title="Correlation Heatmap", xaxis_nticks=36)
+        st.plotly_chart(heatmap_fig, use_container_width=True)
 
 # Step 6: Correlation Analysis
 st.markdown("---")
@@ -285,9 +296,15 @@ if st.button("Run Correlation Analysis", key="btn_corr_analysis"):
         corr_matrix = df[score_cols].corr()
         st.subheader("Correlation Matrix")
         st.dataframe(corr_matrix)
-        fig, ax = plt.subplots(figsize=(8, 6))
-        sns.heatmap(corr_matrix, annot=True, cmap="coolwarm", fmt=".2f", ax=ax)
-        st.pyplot(fig)
+        fig_corr = go.Figure(data=go.Heatmap(
+            z=corr_matrix.values,
+            x=corr_matrix.columns,
+            y=corr_matrix.index,
+            colorscale='Viridis',
+            showscale=True
+        ))
+        fig_corr.update_layout(title="Correlation Matrix Heatmap", xaxis_nticks=36)
+        st.plotly_chart(fig_corr, use_container_width=True)
 
 # Step 7: Exploratory Factor Analysis (EFA)
 st.markdown("---")
