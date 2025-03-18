@@ -1,25 +1,26 @@
-# Core requirements
+# Core packages
 streamlit==1.32.2
-pandas==2.1.4
+pandas==2.2.1
 numpy==1.26.4
 
-# PyTorch ecosystem (compatible versions)
-torch==2.1.2
-torchvision==0.16.2
-torchaudio==2.1.2
+# Sentence Transformers and Dependencies
+sentence-transformers==2.2.2
+torch==2.2.1
+transformers==4.39.2
 
-# NLP/Embeddings
-sentence-transformers==2.6.1
-transformers==4.36.2
+# Visualization
+matplotlib==3.8.3
+seaborn==0.13.2
 
-# Analysis & Visualization
+# Factor Analysis
+factor-analyzer==0.4.1
+
+# Statistical Analysis
 scipy==1.12.0
-factor-analyzer==0.6.0
-plotly==5.18.0
-scikit-learn==1.4.0
+pingouin==0.5.4
 
-# File support
+# Progress bar
+tqdm==4.66.2
+
+# Excel file support
 openpyxl==3.1.2
-
-# Python 3.12 compatibility
-typing-extensions==4.9.0
