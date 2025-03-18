@@ -5,7 +5,7 @@ import torch
 from sentence_transformers import SentenceTransformer, util
 import time
 import logging
-from scipy.stats import zscore
+from scipy.stats import zscore, pearsonr
 from factor_analyzer import FactorAnalyzer
 import plotly.express as px
 import plotly.graph_objects as go
@@ -85,7 +85,7 @@ def compute_similarity_scores_aggregated(model: SentenceTransformer, text_embedd
         item_scores = []
         for i, item in enumerate(items):
             item_embed = model.encode(item, convert_to_tensor=True)
-            sims = util.cos_sim(text_embeddings, item_embed.unsqueeze(0))  # shape: (n_texts, 1)
+            sims = util.cos_sim(text_embeddings, item_embed.unsqueeze(0))
             sims_np = sims.cpu().numpy().flatten()
             if i in reverse_items.get(scale, []):
                 sims_np = 1 - sims_np
@@ -203,6 +203,28 @@ def perform_factor_analysis(data: pd.DataFrame, analysis_type: str, n_factors: i
     else:
         st.error("Invalid factor analysis type selected.")
     return results
+
+def corr_with_pvalues(df: pd.DataFrame):
+    """
+    Compute the correlation matrix along with p-values for each pair of columns.
+    Returns two DataFrames: one for correlations and one for p-values.
+    """
+    cols = df.columns
+    n = len(cols)
+    corr_matrix = pd.DataFrame(np.zeros((n, n)), columns=cols, index=cols)
+    p_matrix = pd.DataFrame(np.zeros((n, n)), columns=cols, index=cols)
+    for i, col1 in enumerate(cols):
+        for j, col2 in enumerate(cols):
+            if i == j:
+                corr_matrix.loc[col1, col2] = 1.0
+                p_matrix.loc[col1, col2] = 0.0
+            elif i < j:
+                r, p = pearsonr(df[col1], df[col2])
+                corr_matrix.loc[col1, col2] = r
+                p_matrix.loc[col1, col2] = p
+                corr_matrix.loc[col2, col1] = r
+                p_matrix.loc[col2, col1] = p
+    return corr_matrix, p_matrix
 
 def add_footer() -> None:
     """Add a persistent footer to all pages."""
@@ -328,7 +350,7 @@ if st.session_state.get("model_instance") is None:
 # =============================================================================
 st.title("BERT-based Text Analysis Application")
 st.markdown("### Analysis Steps")
-st.write("Configure file uploads and scoring method in the sidebar. Then, proceed with analysis below.")
+st.write("Configure file uploads, scoring method, and factor analysis parameters in the sidebar. Then, proceed with analysis below.")
 
 # Step 1: Generate Text Embeddings
 st.markdown("---")
@@ -410,7 +432,7 @@ if st.button("Normalize Data", key="btn_normalize_data"):
         st.success("Data normalized successfully.")
         st.write(df_norm.head())
 
-# Factor Analysis Customization Section
+# Step 5: Factor Analysis Customization
 st.markdown("---")
 st.header("Step 5: Factor Analysis Customization")
 fa_type = st.selectbox("Choose factor analysis type:", options=["EFA", "PCA", "CFA"])
@@ -435,18 +457,52 @@ if st.button("Run Factor Analysis", key="btn_fa"):
             if show_scree and "scree_plot" in fa_results:
                 st.plotly_chart(fa_results["scree_plot"], use_container_width=True)
 
-# Step 6: Descriptive Statistics & Visualizations (Using Plotly)
+# Step 6: Descriptive Statistics, Correlation, and Visualization
 st.markdown("---")
-st.header("Step 6: Descriptive Statistics & Visualizations")
-if st.button("Show Descriptive Statistics & Visualizations", key="btn_desc_stats"):
-    if st.session_state.similarity_results is None:
-        st.error("Please compute similarity scores first.")
-    else:
-        df = st.session_state.similarity_results.copy()
-        st.subheader("Descriptive Statistics")
-        st.write(df.describe())
-        
-        score_cols = [col for col in df.columns if col != "Text"]
+st.header("Step 6: Descriptive Statistics, Correlation, and Visualization")
+if st.session_state.similarity_results is None:
+    st.error("Please compute similarity scores first.")
+else:
+    df = st.session_state.similarity_results.copy()
+    st.subheader("Descriptive Statistics")
+    st.write(df.describe())
+    
+    # Compute correlation matrix and p-values (excluding the "Text" column)
+    score_cols = [col for col in df.columns if col != "Text"]
+    def corr_with_pvalues(df_sub):
+        cols = df_sub.columns
+        n = len(cols)
+        corr_matrix = pd.DataFrame(np.zeros((n, n)), columns=cols, index=cols)
+        p_matrix = pd.DataFrame(np.zeros((n, n)), columns=cols, index=cols)
+        for i, col1 in enumerate(cols):
+            for j, col2 in enumerate(cols):
+                if i == j:
+                    corr_matrix.loc[col1, col2] = 1.0
+                    p_matrix.loc[col1, col2] = 0.0
+                elif i < j:
+                    r, p = pearsonr(df_sub[col1], df_sub[col2])
+                    corr_matrix.loc[col1, col2] = r
+                    p_matrix.loc[col1, col2] = p
+                    corr_matrix.loc[col2, col1] = r
+                    p_matrix.loc[col2, col1] = p
+        return corr_matrix, p_matrix
+
+    corrs, pvals = corr_with_pvalues(df[score_cols])
+    # Combine correlation coefficients and p-values into one table.
+    combined = corrs.copy()
+    for col in corrs.columns:
+        for idx in corrs.index:
+            combined.loc[idx, col] = f"{corrs.loc[idx, col]:.2f} (p={pvals.loc[idx, col]:.3f})"
+    st.subheader("Correlation Matrix with p-values")
+    st.dataframe(combined)
+    
+    # Download enhanced dataset button
+    csv = df.to_csv(index=False).encode('utf-8')
+    st.download_button(label="Download Enhanced Dataset", data=csv, file_name='enhanced_dataset.csv', mime='text/csv')
+    
+    # Visualizations on demand
+    if st.button("Show Visualizations", key="btn_show_visualizations"):
+        # Interactive histograms: five per row.
         n_cols = 5
         n_plots = len(score_cols)
         n_rows = (n_plots + n_cols - 1) // n_cols
@@ -460,39 +516,17 @@ if st.button("Show Descriptive Statistics & Visualizations", key="btn_desc_stats
         fig_hist.update_layout(height=300 * n_rows, width=2000, title_text="Histograms", showlegend=False)
         st.plotly_chart(fig_hist, use_container_width=True)
         
-        corr = df[score_cols].corr()
+        # Interactive correlation heatmap (without annotations)
         heatmap_fig = go.Figure(data=go.Heatmap(
-            z=corr.values,
-            x=corr.columns,
-            y=corr.index,
+            z=corrs.values,
+            x=corrs.columns,
+            y=corrs.index,
             colorscale='Viridis',
             showscale=True,
             hoverinfo='x+y+z'
         ))
         heatmap_fig.update_layout(title="Correlation Heatmap", xaxis_nticks=36)
         st.plotly_chart(heatmap_fig, use_container_width=True)
-
-# Step 7: Correlation Analysis
-st.markdown("---")
-st.header("Step 7: Correlation Analysis")
-if st.button("Run Correlation Analysis", key="btn_corr_analysis"):
-    if st.session_state.similarity_results is None:
-        st.error("Please compute similarity scores first.")
-    else:
-        df = st.session_state.similarity_results.copy()
-        score_cols = [col for col in df.columns if col != "Text"]
-        corr_matrix = df[score_cols].corr()
-        st.subheader("Correlation Matrix")
-        st.dataframe(corr_matrix)
-        fig_corr = go.Figure(data=go.Heatmap(
-            z=corr_matrix.values,
-            x=corr_matrix.columns,
-            y=corr_matrix.index,
-            colorscale='Viridis',
-            showscale=True
-        ))
-        fig_corr.update_layout(title="Correlation Matrix Heatmap", xaxis_nticks=36)
-        st.plotly_chart(fig_corr, use_container_width=True)
 
 # Add persistent footer
 add_footer()
