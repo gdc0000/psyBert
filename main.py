@@ -1,3 +1,6 @@
+import os
+os.environ["TRANSFORMERS_NO_CODECARBON"] = "1"
+
 import streamlit as st
 import pandas as pd
 import numpy as np
