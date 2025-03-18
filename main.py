@@ -11,29 +11,44 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from sklearn.decomposition import PCA  # For PCA analysis
-
 import os
+
+# Environment variable to disable CodeCarbon tracking in transformers (if needed)
 os.environ["TRANSFORMERS_NO_CODECARBON"] = "1"
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
 # Set page configuration
 st.set_page_config(page_title="BERT-based Text Analysis Application", layout="wide")
 
-# =============================================================================
+# -----------------------------------------------------------------------------
+# Session State Initialization for uploaded data and parameters
+# -----------------------------------------------------------------------------
+if "scales_data" not in st.session_state:
+    st.session_state.scales_data = {}
+if "reverse_items" not in st.session_state:
+    st.session_state.reverse_items = {}
+if "constructs" not in st.session_state:
+    st.session_state.constructs = []  # For method 3: interactive constructs
+if "similarity_results" not in st.session_state:
+    st.session_state.similarity_results = None
+
+# -----------------------------------------------------------------------------
 # Helper Functions
-# =============================================================================
-
+# -----------------------------------------------------------------------------
 @st.cache_data(show_spinner=False)
-def load_text_data(file, file_type: str) -> pd.DataFrame:
-    """Load text data from CSV or Excel."""
+def load_text_data(file_bytes, file_type: str) -> pd.DataFrame:
+    """Load text data from CSV or Excel using file bytes."""
     if file_type == "csv":
-        return pd.read_csv(file)
+        from io import StringIO
+        return pd.read_csv(StringIO(file_bytes.decode('utf-8')))
     else:
-        return pd.read_excel(file)
+        from io import BytesIO
+        return pd.read_excel(BytesIO(file_bytes))
 
 @st.cache_data(show_spinner=False)
-def load_scales(file) -> (dict, dict):
+def load_scales(file_bytes) -> (dict, dict):
     """
     Load validated scales from an Excel file.
     Each sheet should contain columns "Item" and "Rev".
@@ -41,7 +56,8 @@ def load_scales(file) -> (dict, dict):
         scales_data: dict mapping construct names to list of items.
         reverse_items_dict: dict mapping construct names to list of computed reverse indices.
     """
-    xls = pd.ExcelFile(file)
+    from io import BytesIO
+    xls = pd.ExcelFile(BytesIO(file_bytes))
     scales_data = {}
     reverse_items_dict = {}
     for sheet_name in xls.sheet_names:
@@ -248,17 +264,9 @@ def add_footer() -> None:
     [LinkedIn](https://www.linkedin.com/in/gabriele-di-cicco-124067b0/)
     """)
 
-# =============================================================================
-# Session State Initialization
-# =============================================================================
-if "constructs" not in st.session_state:
-    st.session_state.constructs = []  # For method 3: interactive constructs
-if "similarity_results" not in st.session_state:
-    st.session_state.similarity_results = None
-
-# =============================================================================
+# -----------------------------------------------------------------------------
 # Sidebar: File Uploads and Configurations
-# =============================================================================
+# -----------------------------------------------------------------------------
 st.sidebar.header("Configuration")
 
 # Scoring Method Selection
@@ -278,7 +286,8 @@ text_file = st.sidebar.file_uploader("Upload Text Data (CSV or Excel)", type=["c
 if text_file:
     file_type = "csv" if text_file.name.endswith("csv") else "xlsx"
     try:
-        st.session_state.text_data = load_text_data(text_file, file_type)
+        file_bytes = text_file.getvalue()
+        st.session_state.text_data = load_text_data(file_bytes, file_type)
         st.sidebar.write("Preview of Text Data:")
         st.sidebar.dataframe(st.session_state.text_data.head())
         cols = st.session_state.text_data.columns.tolist()
@@ -292,7 +301,8 @@ if scoring_method in ["Aggregated Items (Excel Upload)", "Item-by-item (Excel Up
     scales_file = st.sidebar.file_uploader("Upload Excel file", type=["xlsx"], key="scales_file")
     if scales_file:
         try:
-            all_scales_data, all_reverse_items_dict = load_scales(scales_file)
+            scales_bytes = scales_file.getvalue()
+            all_scales_data, all_reverse_items_dict = load_scales(scales_bytes)
             available_scales = list(all_scales_data.keys())
             selected_scales = st.sidebar.multiselect("Select scales to include", options=available_scales,
                                                      default=available_scales, key="selected_scales")
@@ -352,14 +362,14 @@ selected_model = st.sidebar.selectbox("Choose model", list(model_options.keys())
 st.sidebar.write(model_options[selected_model])
 st.session_state.selected_model = selected_model
 
-if st.session_state.get("model_instance") is None:
+if "model_instance" not in st.session_state:
     with st.spinner("Loading embedding model..."):
         st.session_state.model_instance = get_model(st.session_state.selected_model)
     st.sidebar.success("Model loaded.")
 
-# =============================================================================
+# -----------------------------------------------------------------------------
 # Main Window: Analysis Steps and Outputs
-# =============================================================================
+# -----------------------------------------------------------------------------
 st.title("BERT-based Text Analysis Application")
 st.markdown("### Analysis Steps")
 st.write("Configure file uploads, scoring method, and factor analysis parameters in the sidebar. Then, proceed below.")
@@ -368,7 +378,7 @@ st.write("Configure file uploads, scoring method, and factor analysis parameters
 st.markdown("---")
 st.header("Step 1: Generate Text Embeddings")
 if st.button("Generate Text Embeddings", key="btn_gen_text_embed"):
-    if st.session_state.text_data is None or st.session_state.text_column is None:
+    if "text_data" not in st.session_state or st.session_state.text_column is None:
         st.error("Please upload text data and select the textual column in the sidebar.")
     else:
         texts = st.session_state.text_data[st.session_state.text_column].dropna().tolist()
@@ -382,7 +392,7 @@ if st.button("Generate Text Embeddings", key="btn_gen_text_embed"):
 st.markdown("---")
 st.header("Step 2: Compute Similarity Scores")
 if st.button("Compute Similarity Scores", key="btn_compute_sim"):
-    if st.session_state.text_embeddings is None:
+    if "text_embeddings" not in st.session_state:
         st.error("Please generate text embeddings first.")
     else:
         if st.session_state.method in ["Aggregated Items (Excel Upload)", "Item-by-item (Excel Upload)"]:
@@ -495,7 +505,7 @@ st.markdown("---")
 st.header("Step 6: Download Enhanced Dataset")
 if st.session_state.similarity_results is not None:
     # Use normalized dataset if available; otherwise, use similarity_results
-    download_df = st.session_state.normalized_df if st.session_state.get("normalized_df") is not None else st.session_state.similarity_results
+    download_df = st.session_state.normalized_df if "normalized_df" in st.session_state and st.session_state.normalized_df is not None else st.session_state.similarity_results
     csv = download_df.to_csv(index=False).encode('utf-8')
     st.download_button(
         label="Download CSV",
