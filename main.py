@@ -140,7 +140,7 @@ def compute_similarity_scores_single(model: SentenceTransformer, text_embeddings
     return pd.DataFrame(results)
 
 def exclude_outliers(df: pd.DataFrame) -> pd.DataFrame:
-    """Exclude rows with z-scores greater than 3."""
+    """Exclude rows with z-scores greater than 3 in any similarity score column."""
     score_cols = [col for col in df.columns if col != "Text"]
     z_scores = df[score_cols].apply(zscore)
     mask = (np.abs(z_scores) <= 3).all(axis=1)
@@ -173,7 +173,6 @@ def compute_corr_with_significance(df: pd.DataFrame) -> pd.DataFrame:
             if i == j:
                 annotated.iloc[i, j] = f"{r:.2f}"
             else:
-                # Compute p-value using pearsonr on the two columns
                 _, p = pearsonr(df[score_cols[i]], df[score_cols[j]])
                 if p < 0.001:
                     stars = "***"
@@ -339,12 +338,15 @@ else:
         for c in st.session_state.constructs:
             st.sidebar.write(f"- **{c['name']}**")
 
-# Model Selection
+# Model Selection with Additional Options
 st.sidebar.subheader("Select Embedding Model")
 model_options = {
     "all-MiniLM-L6-v2": "Lightweight and efficient model for sentence embeddings.",
     "paraphrase-MiniLM-L3-v2": "Faster model with lower dimensionality, ideal for paraphrase tasks.",
-    "all-distilroberta-v1": "Robust model based on DistilRoBERTa for diverse tasks."
+    "all-distilroberta-v1": "Robust model based on DistilRoBERTa for diverse tasks.",
+    "all-MiniLM-L12-v2": "Larger variant of MiniLM with improved accuracy.",
+    "all-mpnet-base-v2": "High-performance model with robust representations.",
+    "paraphrase-mpnet-base-v2": "Optimized for paraphrase tasks with MPNet architecture."
 }
 selected_model = st.sidebar.selectbox("Choose model", list(model_options.keys()), index=0)
 st.sidebar.write(model_options[selected_model])
@@ -454,14 +456,11 @@ if st.button("Show Descriptives & Correlation Table", key="btn_corr_table"):
         st.write(df.describe())
         
         st.subheader("Correlation Matrix with Significance")
-        # Compute correlation table with significance markers
         corr_annotated = compute_corr_with_significance(df)
         st.dataframe(corr_annotated)
         
-        # Button to reveal plots
         if st.button("Show Interactive Plots", key="btn_show_plots"):
             score_cols = [col for col in df.columns if col != "Text"]
-            # Histograms arranged five per row
             n_cols = 5
             n_plots = len(score_cols)
             n_rows = (n_plots + n_cols - 1) // n_cols
@@ -475,7 +474,6 @@ if st.button("Show Descriptives & Correlation Table", key="btn_corr_table"):
             fig_hist.update_layout(height=300 * n_rows, width=2000, title_text="Histograms", showlegend=False)
             st.plotly_chart(fig_hist, use_container_width=True)
             
-            # Interactive correlation heatmap (without numeric annotations)
             corr = df[score_cols].corr()
             heatmap_fig = go.Figure(data=go.Heatmap(
                 z=corr.values,
@@ -492,7 +490,6 @@ if st.button("Show Descriptives & Correlation Table", key="btn_corr_table"):
 st.markdown("---")
 st.header("Step 6: Download Enhanced Dataset")
 if st.session_state.similarity_results is not None:
-    # Use normalized dataset if available; otherwise, use similarity_results
     download_df = st.session_state.normalized_df if st.session_state.get("normalized_df") is not None else st.session_state.similarity_results
     csv = download_df.to_csv(index=False).encode('utf-8')
     st.download_button(
