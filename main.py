@@ -459,9 +459,8 @@ if st.button("Show Descriptives & Correlation Table", key="btn_corr_table"):
         st.dataframe(corr_annotated)
         
         # Button to reveal plots
-        if st.button("Show Interactive Plots", key="btn_show_plots"):
+        with st.expander("Interactive Plots"):
             score_cols = [col for col in df.columns if col != "Text"]
-            # Histograms arranged five per row
             n_cols = 5
             n_plots = len(score_cols)
             n_rows = (n_plots + n_cols - 1) // n_cols
@@ -474,8 +473,7 @@ if st.button("Show Descriptives & Correlation Table", key="btn_corr_table"):
                     fig_hist.add_trace(trace, row=row, col=col_idx)
             fig_hist.update_layout(height=300 * n_rows, width=2000, title_text="Histograms", showlegend=False)
             st.plotly_chart(fig_hist, use_container_width=True)
-            
-            # Interactive correlation heatmap (without numeric annotations)
+                    
             corr = df[score_cols].corr()
             heatmap_fig = go.Figure(data=go.Heatmap(
                 z=corr.values,
@@ -487,6 +485,7 @@ if st.button("Show Descriptives & Correlation Table", key="btn_corr_table"):
             ))
             heatmap_fig.update_layout(title="Correlation Heatmap", xaxis_nticks=36)
             st.plotly_chart(heatmap_fig, use_container_width=True)
+
 
 # Step 6: Download Enhanced Dataset
 st.markdown("---")
