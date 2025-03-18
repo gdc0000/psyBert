@@ -12,6 +12,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from sklearn.decomposition import PCA  # For PCA analysis
 
+import os
+os.environ["TRANSFORMERS_NO_CODECARBON"] = "1"
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
