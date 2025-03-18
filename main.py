@@ -459,7 +459,7 @@ if st.button("Show Descriptives & Correlation Table", key="btn_corr_table"):
         st.dataframe(corr_annotated)
         
         # Button to reveal plots
-        with st.expander("Interactive Plots"):
+        if st.checkbox("Show Interactive Plots", key="btn_show_plots"):
             score_cols = [col for col in df.columns if col != "Text"]
             n_cols = 5
             n_plots = len(score_cols)
@@ -485,6 +485,7 @@ if st.button("Show Descriptives & Correlation Table", key="btn_corr_table"):
             ))
             heatmap_fig.update_layout(title="Correlation Heatmap", xaxis_nticks=36)
             st.plotly_chart(heatmap_fig, use_container_width=True)
+
 
 
 # Step 6: Download Enhanced Dataset
