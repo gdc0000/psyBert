@@ -1,10 +1,8 @@
-streamlit
-pandas
-numpy
-torch==2.2.0
-torchvision==0.17.0
-sentence-transformers
-scipy
-factor-analyzer
-plotly
-scikit-learn
+streamlit==1.31.1
+sentence-transformers==2.2.2
+torch==2.2.0  # Modify for GPU if needed (e.g., torch==2.2.0+cu121)
+pandas==2.2.1
+numpy==1.26.4
+scipy==1.11.4
+factor-analyzer==0.5.0
+plotly==5.19.0
