@@ -7,10 +7,8 @@ import time
 import logging
 from scipy.stats import zscore, pearsonr
 from factor_analyzer import FactorAnalyzer
-import plotly.express as px
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-from sklearn.decomposition import PCA  # For PCA analysis
+from sklearn.decomposition import PCA
+import os
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -173,7 +171,6 @@ def compute_corr_with_significance(df: pd.DataFrame) -> pd.DataFrame:
             if i == j:
                 annotated.iloc[i, j] = f"{r:.2f}"
             else:
-                # Compute p-value using pearsonr on the two columns
                 _, p = pearsonr(df[score_cols[i]], df[score_cols[j]])
                 if p < 0.001:
                     stars = "***"
@@ -208,10 +205,8 @@ def perform_factor_analysis(data: pd.DataFrame, analysis_type: str, n_factors: i
             results["eigenvalues"] = eigenvalues
             results["loadings"] = loadings
             if show_scree:
-                scree_fig = px.line(x=list(range(1, len(eigenvalues)+1)), y=eigenvalues,
-                                    markers=True, labels={'x': 'Factor', 'y': 'Eigenvalue'},
-                                    title="Scree Plot (EFA)")
-                results["scree_plot"] = scree_fig
+                # Scree plot generation code would go here if visualization were desired.
+                results["scree_plot"] = None
         except Exception as e:
             st.error(f"EFA error: {e}")
     elif analysis_type == "PCA":
@@ -224,10 +219,7 @@ def perform_factor_analysis(data: pd.DataFrame, analysis_type: str, n_factors: i
             results["eigenvalues"] = eigenvalues
             results["loadings"] = loadings
             if show_scree:
-                scree_fig = px.line(x=list(range(1, len(eigenvalues)+1)), y=eigenvalues,
-                                    markers=True, labels={'x': 'Component', 'y': 'Eigenvalue'},
-                                    title="Scree Plot (PCA)")
-                results["scree_plot"] = scree_fig
+                results["scree_plot"] = None
         except Exception as e:
             st.error(f"PCA error: {e}")
     elif analysis_type == "CFA":
@@ -250,7 +242,7 @@ def add_footer() -> None:
 # Session State Initialization
 # =============================================================================
 if "constructs" not in st.session_state:
-    st.session_state.constructs = []  # For method 3: interactive constructs
+    st.session_state.constructs = []  # For interactive constructs
 if "similarity_results" not in st.session_state:
     st.session_state.similarity_results = None
 
@@ -442,7 +434,7 @@ if st.button("Normalize Data", key="btn_normalize_data"):
         st.success("Data normalized successfully.")
         st.write(df_norm.head())
 
-# Step 5: Descriptive & Correlation Analysis
+# Step 5: Descriptive & Correlation Analysis (without interactive plots)
 st.markdown("---")
 st.header("Step 5: Descriptive & Correlation Analysis")
 if st.button("Show Descriptives & Correlation Table", key="btn_corr_table"):
@@ -454,45 +446,13 @@ if st.button("Show Descriptives & Correlation Table", key="btn_corr_table"):
         st.write(df.describe())
         
         st.subheader("Correlation Matrix with Significance")
-        # Compute correlation table with significance markers
         corr_annotated = compute_corr_with_significance(df)
         st.dataframe(corr_annotated)
-        
-        # Button to reveal plots
-        if st.checkbox("Show Interactive Plots", key="btn_show_plots"):
-            score_cols = [col for col in df.columns if col != "Text"]
-            n_cols = 5
-            n_plots = len(score_cols)
-            n_rows = (n_plots + n_cols - 1) // n_cols
-            fig_hist = make_subplots(rows=n_rows, cols=n_cols, subplot_titles=score_cols)
-            for idx, col in enumerate(score_cols):
-                row = (idx // n_cols) + 1
-                col_idx = (idx % n_cols) + 1
-                hist_fig = px.histogram(df, x=col, nbins=30)
-                for trace in hist_fig.data:
-                    fig_hist.add_trace(trace, row=row, col=col_idx)
-            fig_hist.update_layout(height=300 * n_rows, width=2000, title_text="Histograms", showlegend=False)
-            st.plotly_chart(fig_hist, use_container_width=True)
-                    
-            corr = df[score_cols].corr()
-            heatmap_fig = go.Figure(data=go.Heatmap(
-                z=corr.values,
-                x=corr.columns,
-                y=corr.index,
-                colorscale='Viridis',
-                showscale=True,
-                hoverinfo='x+y+z'
-            ))
-            heatmap_fig.update_layout(title="Correlation Heatmap", xaxis_nticks=36)
-            st.plotly_chart(heatmap_fig, use_container_width=True)
-
-
 
 # Step 6: Download Enhanced Dataset
 st.markdown("---")
 st.header("Step 6: Download Enhanced Dataset")
 if st.session_state.similarity_results is not None:
-    # Use normalized dataset if available; otherwise, use similarity_results
     download_df = st.session_state.normalized_df if st.session_state.get("normalized_df") is not None else st.session_state.similarity_results
     csv = download_df.to_csv(index=False).encode('utf-8')
     st.download_button(
