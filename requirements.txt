@@ -1,9 +1,9 @@
-streamlit==1.31.1
-pandas==2.2.1
-numpy==1.26.4
-torch==2.2.1
+streamlit
+pandas
+numpy
+torch
 sentence-transformers
-scipy==1.11.4
-factor-analyzer==0.5.0
-plotly==5.19.0
-scikit-learn==1.2.2
+scipy
+factor-analyzer
+plotly
+scikit-learn
