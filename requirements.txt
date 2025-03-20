@@ -2,7 +2,6 @@
 streamlit==1.32.2
 pandas==2.2.1
 numpy==1.26.4
-distutils
 
 # Sentence Transformers and Dependencies
 sentence-transformers==2.2.2
