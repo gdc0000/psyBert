@@ -14,7 +14,7 @@ import pandas as pd
 import numpy as np
 import torch
 from sentence_transformers import SentenceTransformer, util
-from scipy.stats import zscore, pearsonr
+from scipy.stats import zscore, pearsonr, t
 from factor_analyzer import FactorAnalyzer
 from sklearn.decomposition import PCA
 
@@ -143,81 +143,45 @@ def compute_similarity_scores_single(model: SentenceTransformer,
         return None
     return pd.DataFrame(results)
 
-def exclude_outliers(df: pd.DataFrame) -> pd.DataFrame:
-    """Exclude rows with any z-score greater than 3 for similarity scores."""
-    score_cols = [col for col in df.columns if col != "Text"]
-    z_scores = df[score_cols].apply(zscore)
-    return df[(np.abs(z_scores) <= 3).all(axis=1)]
-
-def normalize_data(df: pd.DataFrame) -> pd.DataFrame:
-    """Apply Min-Max normalization to similarity score columns."""
-    df_norm = df.copy()
-    for col in [c for c in df.columns if c != "Text"]:
-        df_norm[col] = (df_norm[col] - df_norm[col].min()) / (df_norm[col].max() - df_norm[col].min())
-    return df_norm
-
-def compute_corr_with_significance(df: pd.DataFrame) -> pd.DataFrame:
+@st.cache_data(show_spinner=False)
+def compute_corr_with_significance_optimized(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Compute the correlation matrix with significance levels.
+    Compute the correlation matrix with significance levels using vectorized operations.
     Significance markers:
       * p < 0.05: *
       * p < 0.01: **
       * p < 0.001: ***
     """
     score_cols = [col for col in df.columns if col != "Text"]
-    corr_mat = df[score_cols].corr()
+    X = df[score_cols].values
+    n = X.shape[0]
+    # Compute correlation matrix (columns are variables)
+    R = np.corrcoef(X, rowvar=False)
+    # Calculate t-statistics using the formula: t = r * sqrt((n-2)/(1-r^2))
+    # Add identity to avoid division by zero on the diagonal.
+    t_stats = R * np.sqrt((n - 2) / (1 - R**2 + np.eye(len(score_cols))))
+    # Compute two-tailed p-values
+    p_values = 2 * (1 - t.cdf(np.abs(t_stats), df=n - 2))
+    np.fill_diagonal(p_values, 0)  # Diagonals have p-value 0
+    # Annotate correlations with significance stars.
     annotated = pd.DataFrame(index=score_cols, columns=score_cols)
     for i, col_i in enumerate(score_cols):
         for j, col_j in enumerate(score_cols):
-            r = corr_mat.loc[col_i, col_j]
+            r_val = R[i, j]
+            p_val = p_values[i, j]
             if i == j:
-                annotated.loc[col_i, col_j] = f"{r:.2f}"
+                annotated.loc[col_i, col_j] = f"{r_val:.2f}"
             else:
-                _, p = pearsonr(df[col_i], df[col_j])
-                stars = "***" if p < 0.001 else "**" if p < 0.01 else "*" if p < 0.05 else ""
-                annotated.loc[col_i, col_j] = f"{r:.2f}{stars}"
+                if p_val < 0.001:
+                    stars = "***"
+                elif p_val < 0.01:
+                    stars = "**"
+                elif p_val < 0.05:
+                    stars = "*"
+                else:
+                    stars = ""
+                annotated.loc[col_i, col_j] = f"{r_val:.2f}{stars}"
     return annotated
-
-def perform_factor_analysis(data: pd.DataFrame, analysis_type: str, n_factors: int,
-                            rotation: str, show_scree: bool) -> dict:
-    """
-    Perform factor analysis (EFA, PCA, or CFA).
-    CFA is not implemented.
-    """
-    results = {}
-    score_cols = [col for col in data.columns if col != "Text"]
-    X = data[score_cols].values
-
-    if analysis_type == "EFA":
-        try:
-            fa = FactorAnalyzer(n_factors=n_factors, rotation=rotation if rotation != "none" else None)
-            fa.fit(X)
-            eigenvalues, _ = fa.get_eigenvalues()
-            loadings = pd.DataFrame(fa.loadings_, index=score_cols)
-            results["eigenvalues"] = eigenvalues
-            results["loadings"] = loadings
-            if show_scree:
-                results["scree_plot"] = None  # Placeholder
-        except Exception as e:
-            st.error(f"EFA error: {e}")
-    elif analysis_type == "PCA":
-        try:
-            pca = PCA(n_components=n_factors)
-            pca.fit(X)
-            eigenvalues = pca.explained_variance_
-            loadings = pd.DataFrame(pca.components_.T, index=score_cols,
-                                    columns=[f"PC{i+1}" for i in range(n_factors)])
-            results["eigenvalues"] = eigenvalues
-            results["loadings"] = loadings
-            if show_scree:
-                results["scree_plot"] = None  # Placeholder
-        except Exception as e:
-            st.error(f"PCA error: {e}")
-    elif analysis_type == "CFA":
-        st.error("Confirmatory Factor Analysis (CFA) is not implemented.")
-    else:
-        st.error("Invalid factor analysis type selected.")
-    return results
 
 def add_footer() -> None:
     """Add a persistent footer to all pages."""
@@ -326,125 +290,4 @@ if st.session_state.get("model_instance") is None:
 # =============================================================================
 # Main Area: Guided Tabs
 # =============================================================================
-tabs = st.tabs(["Overview", "Embeddings", "Similarity", "Clean & Analyze", "Download"])
-
-# ----- Overview Tab -----
-with tabs[0]:
-    st.header("Welcome to the BERT-based Text Analysis App")
-    st.markdown("""
-    This application enables you to analyze text data using advanced sentence embeddings.
-    **Workflow Overview:**
-    - **Data Input:** Upload your text data and, if applicable, validated scales or define constructs.
-    - **Embeddings:** Generate embeddings for your text.
-    - **Similarity:** Compute similarity scores between your text and scale items or constructs.
-    - **Clean & Analyze:** Remove outliers, normalize data, and view descriptive statistics and correlations.
-    - **Download:** Export your enhanced dataset as CSV.
-    """)
-    st.info("Use the sidebar to configure your files, scoring method, and model. Then navigate through the tabs.")
-
-# ----- Embeddings Tab -----
-with tabs[1]:
-    st.header("Step 1: Generate Text Embeddings")
-    if st.button("Generate Embeddings", key="btn_gen_text_embed"):
-        if st.session_state.get("text_data") is None or st.session_state.get("text_column") is None:
-            st.error("Upload text data and select the textual column from the sidebar.")
-        else:
-            texts = st.session_state.text_data[st.session_state.text_column].dropna().tolist()
-            with st.spinner("Generating embeddings..."):
-                embeddings = generate_text_embeddings(st.session_state.model_instance, texts)
-            st.session_state.text_embeddings = embeddings
-            st.success("Embeddings generated!")
-            st.write("Embeddings shape:", embeddings.shape)
-
-# ----- Similarity Tab -----
-with tabs[2]:
-    st.header("Step 2: Compute Similarity Scores")
-    if st.button("Compute Similarity", key="btn_compute_sim"):
-        if st.session_state.get("text_embeddings") is None:
-            st.error("Please generate embeddings first (see 'Embeddings' tab).")
-        else:
-            if st.session_state.method in ["Aggregated Items (Excel Upload)", "Item-by-item (Excel Upload)"]:
-                if not st.session_state.get("scales_data"):
-                    st.error("Upload validated scales in the sidebar.")
-                else:
-                    with st.spinner("Computing similarity scores..."):
-                        sim_df = (compute_similarity_scores_aggregated(
-                            st.session_state.model_instance,
-                            st.session_state.text_embeddings,
-                            st.session_state.scales_data,
-                            st.session_state.reverse_items
-                        ) if st.session_state.method == "Aggregated Items (Excel Upload)"
-                        else compute_similarity_scores_item_by_item(
-                            st.session_state.model_instance,
-                            st.session_state.text_embeddings,
-                            st.session_state.scales_data,
-                            st.session_state.reverse_items
-                        ))
-            else:
-                if not st.session_state.constructs:
-                    st.error("Please add at least one construct in the sidebar.")
-                else:
-                    with st.spinner("Computing similarity scores..."):
-                        sim_df = compute_similarity_scores_single(
-                            st.session_state.model_instance,
-                            st.session_state.text_embeddings,
-                            st.session_state.constructs
-                        )
-            if sim_df is not None:
-                st.session_state.similarity_results = sim_df
-                st.success("Similarity scores computed!")
-                st.dataframe(sim_df.head())
-
-# ----- Clean & Analyze Tab -----
-with tabs[3]:
-    st.header("Step 3: Clean & Analyze Data")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Exclude Outliers (Z > 3)", key="btn_exclude_outliers"):
-            if st.session_state.get("similarity_results") is None:
-                st.error("Compute similarity scores first (see 'Similarity' tab).")
-            else:
-                df_no_outliers = exclude_outliers(st.session_state.similarity_results)
-                st.session_state.similarity_results = df_no_outliers
-                st.success("Outliers excluded!")
-                st.write("Data shape after removal:", df_no_outliers.shape)
-                st.dataframe(df_no_outliers.head())
-    with col2:
-        if st.button("Normalize Data", key="btn_normalize_data"):
-            if st.session_state.get("similarity_results") is None:
-                st.error("Compute similarity scores first (see 'Similarity' tab).")
-            else:
-                df_norm = normalize_data(st.session_state.similarity_results)
-                st.session_state.normalized_df = df_norm
-                st.success("Data normalized!")
-                st.dataframe(df_norm.head())
-    st.markdown("---")
-    st.header("Descriptive Statistics & Correlations")
-    if st.button("Show Analysis", key="btn_corr_table"):
-        if st.session_state.get("similarity_results") is None:
-            st.error("Compute similarity scores first.")
-        else:
-            df = st.session_state.similarity_results.copy()
-            st.subheader("Descriptive Statistics")
-            st.dataframe(df.describe())
-            st.subheader("Correlation Matrix with Significance")
-            corr_annotated = compute_corr_with_significance(df)
-            st.dataframe(corr_annotated)
-
-# ----- Download Tab -----
-with tabs[4]:
-    st.header("Step 4: Download Enhanced Dataset")
-    if st.session_state.get("similarity_results") is not None:
-        download_df = st.session_state.get("normalized_df", st.session_state.similarity_results)
-        csv = download_df.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="Download CSV",
-            data=csv,
-            file_name='enhanced_dataset.csv',
-            mime='text/csv'
-        )
-    else:
-        st.error("Compute similarity scores and process the data to enable download.")
-
-# Persistent Footer
-add_footer()
+tabs = st.tabs(["Overview", "Embeddings
