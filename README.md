@@ -108,9 +108,7 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 
 For inquiries, feedback, or collaboration opportunities, please reach out:
 
-- **GitHub:** [gdc0000](https://github.com/gdc0000)
 - **LinkedIn:** [Gabriele Di Cicco](https://www.linkedin.com/in/gabriele-di-cicco-124067b0/)
-- **ORCID:** [0000-0002-1439-5790](https://orcid.org/0000-0002-1439-5790)
 
 ---
 
