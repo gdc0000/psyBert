@@ -355,7 +355,8 @@ st.write("Configure file uploads, scoring method, and analysis parameters in the
 st.markdown("---")
 st.header("Step 1: Generate Text Embeddings")
 if st.button("Generate Text Embeddings", key="btn_gen_text_embed"):
-    if not st.session_state.get("text_data") or not st.session_state.get("text_column"):
+    # Check explicitly for None to avoid ambiguity with DataFrame truth value
+    if st.session_state.get("text_data") is None or st.session_state.get("text_column") is None:
         st.error("Please upload text data and select the textual column in the sidebar.")
     else:
         texts = st.session_state.text_data[st.session_state.text_column].dropna().tolist()
