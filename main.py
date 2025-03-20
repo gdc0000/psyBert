@@ -1,3 +1,11 @@
+import sys
+# Patch for Python 3.12: if 'distutils.dir_util' is missing, inject it from setuptools.
+try:
+    import distutils.dir_util
+except ModuleNotFoundError:
+    from setuptools._distutils import dir_util as distutils_dir_util
+    sys.modules["distutils.dir_util"] = distutils_dir_util
+
 import time
 import logging
 
