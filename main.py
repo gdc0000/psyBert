@@ -155,15 +155,10 @@ def compute_corr_with_significance_optimized(df: pd.DataFrame) -> pd.DataFrame:
     score_cols = [col for col in df.columns if col != "Text"]
     X = df[score_cols].values
     n = X.shape[0]
-    # Compute correlation matrix (columns are variables)
     R = np.corrcoef(X, rowvar=False)
-    # Calculate t-statistics using the formula: t = r * sqrt((n-2)/(1-r^2))
-    # Add identity to avoid division by zero on the diagonal.
     t_stats = R * np.sqrt((n - 2) / (1 - R**2 + np.eye(len(score_cols))))
-    # Compute two-tailed p-values
     p_values = 2 * (1 - t.cdf(np.abs(t_stats), df=n - 2))
-    np.fill_diagonal(p_values, 0)  # Diagonals have p-value 0
-    # Annotate correlations with significance stars.
+    np.fill_diagonal(p_values, 0)
     annotated = pd.DataFrame(index=score_cols, columns=score_cols)
     for i, col_i in enumerate(score_cols):
         for j, col_j in enumerate(score_cols):
@@ -258,15 +253,16 @@ with st.sidebar.expander("Scoring Method & Constructs", expanded=True):
             except Exception as e:
                 st.error(f"Error loading scales file: {e}")
     else:
-        with st.expander("Add Construct", expanded=True):
-            construct_name = st.text_input("Construct Name", key="construct_name")
-            construct_text = st.text_area("Construct Text", key="construct_text")
-            if st.button("Add Construct", key="btn_add_construct"):
-                if construct_name and construct_text:
-                    st.session_state.constructs.append({"name": construct_name, "text": construct_text})
-                    st.success(f"Construct '{construct_name}' added.")
-                else:
-                    st.error("Provide both name and text for the construct.")
+        # For Single Construct, display the inputs directly (without nested expander)
+        st.subheader("Add Construct")
+        construct_name = st.text_input("Construct Name", key="construct_name")
+        construct_text = st.text_area("Construct Text", key="construct_text")
+        if st.button("Add Construct", key="btn_add_construct"):
+            if construct_name and construct_text:
+                st.session_state.constructs.append({"name": construct_name, "text": construct_text})
+                st.success(f"Construct '{construct_name}' added.")
+            else:
+                st.error("Provide both name and text for the construct.")
         if st.session_state.constructs:
             st.write("**Current Constructs:**")
             for c in st.session_state.constructs:
