@@ -2,10 +2,8 @@ import pandas as pd
 import streamlit as st
 import torch
 from sentence_transformers import SentenceTransformer, util
-from typing import Optional
 
-
-EMBED_BATCH_SIZE = 64
+from app.settings import EMBED_BATCH_SIZE
 
 
 @st.cache_resource(show_spinner=False)
@@ -58,7 +56,7 @@ def _ensure_matching_rows(results: dict) -> bool:
     return len({len(v) for v in results.values()}) == 1
 
 
-def _finalize_results(results: dict) -> Optional[pd.DataFrame]:
+def _finalize_results(results: dict) -> pd.DataFrame | None:
     if not _ensure_matching_rows(results):
         st.error("Mismatch in data lengths. Please check for missing values.")
         return None
@@ -74,7 +72,7 @@ def compute_similarity_scores_aggregated(
     text_embeddings: torch.Tensor,
     scales_data: dict,
     reverse_items: dict,
-) -> Optional[pd.DataFrame]:
+) -> pd.DataFrame | None:
     texts = _get_text_series().tolist()
     results = {"Text": texts}
     text_embeddings = text_embeddings.float()
@@ -93,7 +91,7 @@ def compute_similarity_scores_aggregated(
                 if valid_rev_idx:
                     sims = sims.clone()
                     sims[:, valid_rev_idx] = 1 - sims[:, valid_rev_idx]
-            results[scale] = sims.mean(dim=1).cpu().numpy()
+            results[scale] = sims.mean(dim=1).cpu().numpy()  # type: ignore[assignment]
 
     return _finalize_results(results)
 
@@ -103,7 +101,7 @@ def compute_similarity_scores_item_by_item(
     text_embeddings: torch.Tensor,
     scales_data: dict,
     reverse_items: dict,
-) -> Optional[pd.DataFrame]:
+) -> pd.DataFrame | None:
     texts = _get_text_series().tolist()
     results = {"Text": texts}
     text_embeddings = text_embeddings.float()
@@ -123,14 +121,14 @@ def compute_similarity_scores_item_by_item(
                     sims[:, valid_rev_idx] = 1 - sims[:, valid_rev_idx]
             sims_np = sims.cpu().numpy()
         for i in range(sims_np.shape[1]):
-            results[f"{scale}_{i + 1}"] = sims_np[:, i]
+            results[f"{scale}_{i + 1}"] = sims_np[:, i]  # type: ignore[assignment]
 
     return _finalize_results(results)
 
 
 def compute_similarity_scores_single(
     model: SentenceTransformer, text_embeddings: torch.Tensor, constructs: list
-) -> Optional[pd.DataFrame]:
+) -> pd.DataFrame | None:
     texts = _get_text_series().tolist()
     results = {"Text": texts}
 
@@ -145,6 +143,6 @@ def compute_similarity_scores_single(
         sims = util.cos_sim(text_embeddings, construct_embeddings).cpu().numpy()
 
     for i, name in enumerate(names):
-        results[name] = sims[:, i]
+        results[name] = sims[:, i]  # type: ignore[assignment]
 
     return _finalize_results(results)

@@ -1,4 +1,11 @@
 __pycache__/
 *.py[cod]
 *$py.class
-
+.venv/
+.env
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+*.egg-info/
+dist/
+build/

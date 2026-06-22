@@ -32,4 +32,3 @@ def compute_corr_with_significance_optimized(df: pd.DataFrame) -> pd.DataFrame:
                     stars = ""
                 annotated.loc[col_i, col_j] = f"{r_val:.2f}{stars}"
     return annotated
-
