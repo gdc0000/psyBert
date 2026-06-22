@@ -23,7 +23,7 @@ dev = [
     "pytest>=8",
     "pytest-cov>=5",
     "ruff>=0.4",
-    "mypy>=1.9",
+    "mypy>=1.11",
     "pre-commit>=3.7",
 ]
 test = [
@@ -42,7 +42,7 @@ select = ["E", "F", "I", "N", "W", "UP"]
 quote-style = "double"
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.12"
 strict = false
 ignore_missing_imports = true
 warn_unused_configs = true

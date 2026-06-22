@@ -1,8 +1,10 @@
+from typing import Any
+
 import streamlit as st
 
 
 def init_session_state() -> None:
-    defaults = {
+    defaults: dict[str, Any] = {
         "constructs": [],
         "similarity_results": None,
         "model_instance": None,

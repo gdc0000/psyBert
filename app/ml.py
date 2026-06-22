@@ -24,7 +24,7 @@ def _encode_in_batches(
 ) -> torch.Tensor:
     if not texts:
         model_device = model.device if hasattr(model, "device") else torch.device("cpu")
-        emb_dim = model.get_sentence_embedding_dimension()
+        emb_dim = model.get_sentence_embedding_dimension() or 768
         return _empty_embedding_tensor(model_device, emb_dim)
 
     chunks = []
